@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 
 from app.jobs import artifact_path, create_and_run_job, get_job, history, job_to_dict
 from app.parser import parse_tabular_text
-from app.registry import get_module, grouped_modules_to_dict, module_to_dict
+from app.r_engine import check_r_engine
+from app.registry import get_module, grouped_modules_to_dict, list_modules, module_to_dict
 
 
 class PrecheckRequest(BaseModel):
@@ -36,8 +37,15 @@ app.add_middleware(
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, Any]:
+    r_status = check_r_engine()
+    return {
+        "status": "ok",
+        "templateCount": len(list_modules()),
+        "pythonModules": sum(1 for module in list_modules() if module.engine == "python"),
+        "rModules": sum(1 for module in list_modules() if module.engine == "r"),
+        "r": r_status.to_dict(),
+    }
 
 
 @app.get("/api/modules")
@@ -65,6 +73,12 @@ def precheck(slug: str, payload: PrecheckRequest) -> dict[str, Any]:
     errors = parsed.errors.copy()
     if missing:
         errors.append(f"Missing required column(s): {', '.join(missing)}.")
+    engine_status = None
+    if manifest.engine == "r":
+        check = check_r_engine(manifest.r_packages)
+        engine_status = check.to_dict()
+        if not check.available:
+            errors.extend(check.errors)
     return {
         "headers": parsed.headers,
         "rowCount": parsed.row_count,
@@ -72,6 +86,8 @@ def precheck(slug: str, payload: PrecheckRequest) -> dict[str, Any]:
         "previewRows": parsed.preview_rows,
         "warnings": parsed.warnings,
         "errors": errors,
+        "engine": manifest.engine,
+        "engineStatus": engine_status,
     }
 
 

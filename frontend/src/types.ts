@@ -19,6 +19,10 @@ export interface PlotModule {
   demoData: string;
   citation: string;
   exportFormats: ExportFormat[];
+  sourceUrl: string;
+  engine: "python" | "r";
+  rendererFamily: string;
+  aliases: string[];
 }
 
 export interface PrecheckResult {
@@ -28,6 +32,13 @@ export interface PrecheckResult {
   previewRows: Record<string, string>[];
   warnings: string[];
   errors: string[];
+  engine?: "python" | "r";
+  engineStatus?: {
+    available: boolean;
+    executable?: string | null;
+    version?: string | null;
+    errors: string[];
+  } | null;
 }
 
 export interface JobResult {

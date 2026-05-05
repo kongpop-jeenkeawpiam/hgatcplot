@@ -1,9 +1,27 @@
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from app.parser import parse_tabular_text
 from app.registry import get_module, list_modules
+from app.r_engine import RCheckResult, check_r_engine, run_r_renderer
 from app.renderers import render_plot
+
+
+TEST_TMP_ROOT = Path(
+    os.environ.get(
+        "HGATCPLOT_TEST_TMP_ROOT",
+        str(Path(__file__).resolve().parents[1] / "storage" / "test-tmp"),
+    )
+)
+
+
+def temporary_directory() -> tempfile.TemporaryDirectory:
+    TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT, ignore_cleanup_errors=True)
 
 
 class ParserContractTests(unittest.TestCase):
@@ -25,16 +43,25 @@ class ParserContractTests(unittest.TestCase):
 
 
 class ModuleRegistryContractTests(unittest.TestCase):
-    def test_registry_exposes_seed_modules_grouped_by_category(self):
+    def test_registry_exposes_all_srplot_templates_with_unique_contracts(self):
         modules = list_modules()
         slugs = {module.slug for module in modules}
+        source_urls = {module.source_url for module in modules}
 
-        self.assertGreaterEqual(len(modules), 12)
+        self.assertEqual(len(modules), 125)
+        self.assertEqual(len(slugs), 125)
+        self.assertEqual(len(source_urls), 125)
         self.assertIn("volcano", slugs)
         self.assertIn("heatmap", slugs)
+        self.assertIn("motif-logo", slugs)
+        self.assertIn("maf-oncoplot", slugs)
         self.assertIn("km-survival", slugs)
         self.assertIn("pca", slugs)
         self.assertTrue(all(module.export_formats == ["png", "tiff", "svg", "pdf"] for module in modules))
+        self.assertTrue(all(module.source_url.startswith("https://bioinformatics.com.cn/en") for module in modules))
+        self.assertTrue(all(module.engine in {"python", "r"} for module in modules))
+        self.assertTrue(all(module.renderer_family for module in modules))
+        self.assertGreaterEqual(sum(1 for module in modules if module.engine == "r"), 25)
 
     def test_module_manifest_contains_demo_data_and_required_columns(self):
         module = get_module("volcano")
@@ -42,24 +69,94 @@ class ModuleRegistryContractTests(unittest.TestCase):
         self.assertEqual(module.category, "Transcriptome")
         self.assertEqual(module.required_columns, ["gene", "log2FC", "pvalue"])
         self.assertIn("log2FC", module.demo_data)
+        self.assertIn("volcano", module.aliases)
 
-
-class RendererContractTests(unittest.TestCase):
-    def test_each_seed_module_renders_all_export_artifacts(self):
-        output_root = Path(__file__).resolve().parents[1] / "storage" / "test-renders"
-        output_root.mkdir(parents=True, exist_ok=True)
-
+    def test_every_module_has_demo_data_options_and_exports(self):
         for module in list_modules():
             with self.subTest(module=module.slug):
                 parsed = parse_tabular_text(module.demo_data)
-                result = render_plot(module.slug, parsed, module.default_options, output_root / module.slug)
+                self.assertEqual(parsed.errors, [])
+                self.assertGreater(parsed.row_count, 0)
+                self.assertTrue(set(module.required_columns).issubset(parsed.headers))
+                self.assertTrue(module.default_options)
+                self.assertTrue(module.option_fields)
 
-                self.assertEqual(result.status, "succeeded")
-                self.assertEqual(set(result.artifacts), {"png", "tiff", "svg", "pdf"})
-                for artifact in result.artifacts.values():
-                    path = Path(artifact)
-                    self.assertTrue(path.exists())
-                    self.assertGreater(path.stat().st_size, 50)
+
+class RendererContractTests(unittest.TestCase):
+    def test_each_module_demo_renders_all_export_artifacts(self):
+        r_available = check_r_engine().available
+        skipped_r_modules = []
+
+        with temporary_directory() as tmp:
+            output_root = Path(tmp)
+            for module in list_modules():
+                if module.engine == "r" and not r_available:
+                    skipped_r_modules.append(module.slug)
+                    continue
+                with self.subTest(module=module.slug):
+                    parsed = parse_tabular_text(module.demo_data)
+                    result = render_plot(module.slug, parsed, module.default_options, output_root / module.slug)
+
+                    self.assertEqual(result.status, "succeeded", result.errors)
+                    self.assertEqual(set(result.artifacts), {"png", "tiff", "svg", "pdf"})
+                    for artifact in result.artifacts.values():
+                        path = Path(artifact)
+                        self.assertTrue(path.exists())
+                        self.assertGreater(path.stat().st_size, 50)
+
+        if skipped_r_modules:
+            self.skipTest(f"R is unavailable; skipped {len(skipped_r_modules)} R module render checks.")
+
+
+class REngineContractTests(unittest.TestCase):
+    def test_missing_configured_r_executable_reports_clear_error(self):
+        with mock.patch.dict(os.environ, {"HGATCPLOT_RSCRIPT": "Z:/missing/R.exe"}):
+            status = check_r_engine()
+
+        self.assertFalse(status.available)
+        self.assertTrue(any("HGATCPLOT_RSCRIPT" in error for error in status.errors))
+
+    def test_failed_r_package_load_reports_error(self):
+        if not check_r_engine().available:
+            self.skipTest("R is unavailable in this environment.")
+
+        status = check_r_engine(["HGATCplotMissingPackageForTest"])
+
+        self.assertFalse(status.available)
+        self.assertTrue(status.errors)
+
+    def test_r_render_timeout_is_reported(self):
+        module = get_module("motif-logo")
+        parsed = parse_tabular_text(module.demo_data)
+        fake_status = RCheckResult(True, "R.exe", "R version test", [])
+
+        with temporary_directory() as tmp:
+            with mock.patch("app.r_engine.check_r_engine", return_value=fake_status):
+                with mock.patch("app.r_engine.subprocess.run", side_effect=subprocess.TimeoutExpired("R", 1)):
+                    result = run_r_renderer(module, parsed, module.default_options, Path(tmp))
+
+        self.assertEqual(result.status, "failed")
+        self.assertTrue(any("timed out" in error for error in result.errors))
+
+    def test_r_module_invalid_input_fails_before_render(self):
+        parsed = parse_tabular_text("wrong\tcolumns\nA\t1\n")
+        with temporary_directory() as tmp:
+            result = render_plot("motif-logo", parsed, {}, Path(tmp))
+
+        self.assertEqual(result.status, "failed")
+        self.assertTrue(any("Missing required column" in error for error in result.errors))
+
+    def test_r_module_generates_artifacts_when_r_is_available(self):
+        if not check_r_engine().available:
+            self.skipTest("R is unavailable in this environment.")
+
+        module = get_module("motif-logo")
+        parsed = parse_tabular_text(module.demo_data)
+        with temporary_directory() as tmp:
+            result = render_plot(module.slug, parsed, module.default_options, Path(tmp))
+
+            self.assertEqual(result.status, "succeeded", result.errors)
+            self.assertEqual(set(result.artifacts), {"png", "tiff", "svg", "pdf"})
 
 
 if __name__ == "__main__":

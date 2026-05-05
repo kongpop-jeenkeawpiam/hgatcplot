@@ -138,7 +138,7 @@ export default function App() {
         .map(([category, items]) => [
           category,
           items.filter((module) =>
-            [module.title, module.category, module.description, module.slug].some((value) => value.toLowerCase().includes(lower))
+            [module.title, module.category, module.description, module.slug, module.engine, module.rendererFamily, module.sourceUrl, ...module.aliases].some((value) => value.toLowerCase().includes(lower))
           )
         ])
         .filter(([, items]) => items.length > 0)
@@ -202,6 +202,7 @@ export default function App() {
           </div>
           <div className="status-strip">
             <span><Database size={15} /> {activeModule.requiredColumns.length} columns</span>
+            <span><FlaskConical size={15} /> {activeModule.engine.toUpperCase()}</span>
             <span><ImageDown size={15} /> PNG TIFF SVG PDF</span>
           </div>
         </header>
@@ -372,6 +373,9 @@ export default function App() {
               <BookOpen size={19} />
             </div>
             <p>{activeModule.citation}</p>
+            <a className="source-link" href={activeModule.sourceUrl} target="_blank" rel="noreferrer">
+              SRplot source
+            </a>
           </section>
         </div>
       </section>

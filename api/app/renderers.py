@@ -6,10 +6,11 @@ import struct
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from app.parser import ParsedTable, numeric_value
 from app.registry import get_module
+from app.r_engine import run_r_renderer
 
 
 PALETTE = ["#2f6f73", "#d36f45", "#6f5fa8", "#d1a53c", "#4f8f5f", "#b04c6f", "#58798a", "#8a6d3b"]
@@ -36,8 +37,13 @@ def render_plot(slug: str, parsed: ParsedTable, options: dict, output_dir: Path)
     width = _int_option(options, "width", module.default_options.get("width", 900), 520, 1800)
     height = _int_option(options, "height", module.default_options.get("height", 620), 360, 1400)
     title = str(options.get("title") or module.default_options.get("title") or module.title)
+
+    if module.engine == "r":
+        r_result = run_r_renderer(module, parsed, {**module.default_options, **options}, output_dir)
+        return RenderResult(r_result.status, r_result.artifacts, r_result.warnings, r_result.errors)
+
     svg = SVGCanvas(width, height, title, str(options.get("fontFamily", "Arial")))
-    renderer = RENDERERS.get(slug, _render_scatter)
+    renderer = RENDERERS.get(slug) or FAMILY_RENDERERS.get(module.renderer_family, _render_generic)
     renderer(svg, parsed, {**module.default_options, **options}, title)
     svg_text = svg.finish()
 
@@ -47,7 +53,7 @@ def render_plot(slug: str, parsed: ParsedTable, options: dict, output_dir: Path)
         "tiff": str(output_dir / "plot.tiff"),
         "pdf": str(output_dir / "plot.pdf"),
     }
-    if not _write_matplotlib_artifacts(slug, parsed, {**module.default_options, **options}, artifacts, width, height, title):
+    if not _write_matplotlib_artifacts(slug, module.renderer_family, parsed, {**module.default_options, **options}, artifacts, width, height, title):
         Path(artifacts["svg"]).write_text(svg_text, encoding="utf-8")
         raster_width = min(width, 420)
         raster_height = min(height, 300)
@@ -298,6 +304,122 @@ def _render_pca(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) 
         svg.text(px + 8, py - 8, row.get("sample", ""), 10)
 
 
+def _render_generic(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.axes(parsed.headers[0] if parsed.headers else "x", "value")
+    labels = [row.get(parsed.headers[0], f"Row {index + 1}") for index, row in enumerate(parsed.rows)]
+    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+    max_value = max([abs(value) for value in values] + [1.0])
+    bar_width = w / max(len(values), 1) * 0.58
+    for index, value in enumerate(values):
+        px = x + (index + 0.22) * (w / max(len(values), 1))
+        bar_height = abs(value) / max_value * (h - 22)
+        svg.rect(px, y + h - bar_height, bar_width, bar_height, PALETTE[index % len(PALETTE)], radius=3, opacity=0.82)
+        svg.text(px + bar_width / 2, y + h + 20, labels[index][:8], 10, anchor="middle")
+
+
+def _render_generic_line(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.axes("x", "value")
+    xs = [_first_numeric(row, parsed.headers, index) for index, row in enumerate(parsed.rows)]
+    ys = [_second_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+    points = [_scale_pair(xs[i], ys[i], xs, ys, x, y, w, h) for i in range(len(xs))]
+    svg.polyline(points, PALETTE[0], 3)
+    for point in points:
+        svg.circle(point[0], point[1], 4.5, PALETTE[1])
+
+
+def _render_generic_scatter(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.axes("x", "y")
+    xs = [_first_numeric(row, parsed.headers, index) for index, row in enumerate(parsed.rows)]
+    ys = [_second_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+    for index, (raw_x, raw_y) in enumerate(zip(xs, ys)):
+        px, py = _scale_pair(raw_x, raw_y, xs, ys, x, y, w, h)
+        radius = _int_option(options, "pointSize", 64, 16, 240) ** 0.5
+        svg.circle(px, py, radius, PALETTE[index % len(PALETTE)])
+
+
+def _render_generic_distribution(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.axes("Group", "Value")
+    group_key = "group" if "group" in parsed.headers else parsed.headers[0]
+    groups = sorted({row.get(group_key, "") for row in parsed.rows})
+    values = [_first_numeric(row, parsed.headers, 0) for row in parsed.rows]
+    for index, group in enumerate(groups):
+        group_values = [_first_numeric(row, parsed.headers, 0) for row in parsed.rows if row.get(group_key) == group]
+        gx = x + (index + 0.5) * w / max(len(groups), 1)
+        for offset, value in enumerate(group_values):
+            _, gy = _scale_pair(0, value, [0], values, x, y, w, h)
+            svg.circle(gx + (offset - len(group_values) / 2) * 7, gy, 4.5, PALETTE[index % len(PALETTE)], opacity=0.7)
+        if group_values:
+            low, high = min(group_values), max(group_values)
+            _, y_low = _scale_pair(0, low, [0], values, x, y, w, h)
+            _, y_high = _scale_pair(0, high, [0], values, x, y, w, h)
+            svg.rect(gx - 18, y_high, 36, y_low - y_high, PALETTE[index % len(PALETTE)], opacity=0.25, radius=6)
+        svg.text(gx, y + h + 20, group[:10], 11, anchor="middle")
+
+
+def _render_generic_network(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.plot_area()
+    nodes = sorted({row.get("source", "") for row in parsed.rows} | {row.get("target", "") for row in parsed.rows})
+    cx, cy = x + w / 2, y + h / 2
+    radius = min(w, h) * 0.38
+    positions = {}
+    for index, node in enumerate(nodes):
+        angle = math.tau * index / max(len(nodes), 1)
+        positions[node] = (cx + radius * math.cos(angle), cy + radius * math.sin(angle))
+    for row in parsed.rows:
+        source, target = row.get("source", ""), row.get("target", "")
+        if source in positions and target in positions:
+            svg.line(*positions[source], *positions[target], "#9aa8a3", 1.4)
+    for index, node in enumerate(nodes):
+        px, py = positions[node]
+        svg.circle(px, py, 15, PALETTE[index % len(PALETTE)])
+        svg.text(px, py + 4, node[:10], 9, "#ffffff", anchor="middle", weight="700")
+
+
+def _render_generic_heatmap(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    if len(parsed.headers) >= 3 and parsed.headers[1] == "column":
+        _render_long_matrix(svg, parsed, options, title)
+    else:
+        _render_heatmap(svg, parsed, options, title)
+
+
+def _render_long_matrix(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.plot_area()
+    rows = sorted({row.get("row", "") for row in parsed.rows})
+    columns = sorted({row.get("column", "") for row in parsed.rows})
+    values = [numeric_value(row, "value") for row in parsed.rows]
+    low, high = min(values or [0]), max(values or [1])
+    cell_w = w / max(len(columns), 1)
+    cell_h = h / max(len(rows), 1)
+    for row_index, row_label in enumerate(rows):
+        svg.text(x - 8, y + row_index * cell_h + cell_h * 0.62, row_label[:10], 11, anchor="end")
+        for column_index, column_label in enumerate(columns):
+            match = next((item for item in parsed.rows if item.get("row") == row_label and item.get("column") == column_label), {})
+            ratio = _normalize(numeric_value(match, "value"), low, high)
+            svg.rect(x + column_index * cell_w, y + row_index * cell_h, cell_w - 2, cell_h - 2, _blend("#3a6ea5", "#f2f1e8", "#c94c4c", ratio))
+    for column_index, column_label in enumerate(columns):
+        svg.text(x + column_index * cell_w + cell_w / 2, y + h + 18, column_label[:10], 11, anchor="middle")
+
+
+def _first_numeric(row: dict[str, Any], headers: list[str], default: float = 0.0) -> float:
+    for header in headers:
+        value = numeric_value(row, header, default=math.nan)
+        if not math.isnan(value):
+            return value
+    return default
+
+
+def _second_numeric(row: dict[str, Any], headers: list[str], default: float = 0.0) -> float:
+    seen_first = False
+    for header in headers:
+        value = numeric_value(row, header, default=math.nan)
+        if math.isnan(value):
+            continue
+        if seen_first:
+            return value
+        seen_first = True
+    return default
+
+
 RENDERERS: dict[str, Callable[[SVGCanvas, ParsedTable, dict, str], None]] = {
     "pie": _render_pie,
     "up-down-bar": _render_bar,
@@ -310,6 +432,42 @@ RENDERERS: dict[str, Callable[[SVGCanvas, ParsedTable, dict, str], None]] = {
     "manhattan": _render_manhattan,
     "km-survival": _render_km,
     "roc": _render_roc,
+    "pca": _render_pca,
+}
+
+
+FAMILY_RENDERERS: dict[str, Callable[[SVGCanvas, ParsedTable, dict, str], None]] = {
+    "pie": _render_pie,
+    "bar": _render_generic,
+    "errorbar": _render_generic,
+    "stacked-bar": _render_generic,
+    "line": _render_generic_line,
+    "area": _render_generic_line,
+    "dual-axis": _render_generic_line,
+    "scatter": _render_generic_scatter,
+    "correlation": _render_generic_scatter,
+    "qq": _render_generic_scatter,
+    "distribution": _render_generic_distribution,
+    "density": _render_generic_distribution,
+    "bubble": _render_bubble,
+    "enrichment": _render_bubble,
+    "heatmap": _render_generic_heatmap,
+    "matrix": _render_long_matrix,
+    "set": _render_generic,
+    "network": _render_generic_network,
+    "hierarchy": _render_generic,
+    "funnel": _render_generic,
+    "dumbbell": _render_generic_line,
+    "radar": _render_generic_line,
+    "polar": _render_generic,
+    "calendar": _render_generic,
+    "forest": _render_generic_line,
+    "genome": _render_generic_scatter,
+    "epigenome": _render_generic_scatter,
+    "pathway": _render_generic,
+    "sequence": _render_generic,
+    "wordcloud": _render_generic,
+    "maf": _render_generic,
     "pca": _render_pca,
 }
 
@@ -358,6 +516,11 @@ def _theme_pixels(width: int, height: int, category: str) -> list[tuple[int, int
         "Transcriptome": (79, 143, 95),
         "Genome": (111, 95, 168),
         "Clinical plot": (211, 111, 69),
+        "Network and Set": (176, 76, 111),
+        "Enrichment": (79, 121, 138),
+        "Epigenome": (177, 122, 32),
+        "Pathway and MAF": (88, 109, 168),
+        "Statistical plot": (74, 133, 108),
         "Miscellaneous": (88, 121, 138),
     }
     accent = colors.get(category, (47, 111, 115))
@@ -444,7 +607,7 @@ def _pdf_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
-def _write_matplotlib_artifacts(slug: str, parsed: ParsedTable, options: dict, artifacts: dict[str, str], width: int, height: int, title: str) -> bool:
+def _write_matplotlib_artifacts(slug: str, family: str, parsed: ParsedTable, options: dict, artifacts: dict[str, str], width: int, height: int, title: str) -> bool:
     try:
         import matplotlib
 
@@ -537,10 +700,11 @@ def _write_matplotlib_artifacts(slug: str, parsed: ParsedTable, options: dict, a
         elif slug == "pca":
             _matplotlib_grouped_scatter(ax, parsed, "pc1", "pc2", "group", "sample")
         else:
-            _matplotlib_scatter(ax, parsed, parsed.headers[0], parsed.headers[1])
+            _matplotlib_family_plot(ax, fig, parsed, family, options, LinearSegmentedColormap)
 
         ax.set_title(title, fontsize=14, fontweight="bold", color="#172623")
-        ax.grid(True, color="#dde6e2", linewidth=0.7, alpha=0.7)
+        if family not in {"pie", "set"}:
+            ax.grid(True, color="#dde6e2", linewidth=0.7, alpha=0.7)
         ax.tick_params(axis="both", labelsize=8, colors="#314541")
         for spine in ax.spines.values():
             spine.set_color("#d6e0dc")
@@ -557,6 +721,119 @@ def _write_matplotlib_artifacts(slug: str, parsed: ParsedTable, options: dict, a
             plt.close(fig)
         except Exception:
             pass
+
+
+def _matplotlib_family_plot(ax, fig, parsed: ParsedTable, family: str, options: dict, cmap_factory) -> None:
+    labels = [row.get(parsed.headers[0], f"Row {index + 1}") for index, row in enumerate(parsed.rows)]
+    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+
+    if family in {"pie", "set", "polar"}:
+        ax.pie([abs(value) for value in values], labels=labels, colors=PALETTE[: len(values)], textprops={"fontsize": 8})
+        ax.axis("equal")
+    elif family in {"bar", "hierarchy", "funnel", "calendar", "wordcloud", "pathway", "sequence", "maf"}:
+        orientation = str(options.get("orientation", "vertical"))
+        if orientation == "horizontal" or family == "funnel":
+            order = list(range(len(values)))[::-1]
+            ax.barh([labels[index] for index in order], [abs(values[index]) for index in order], color=[PALETTE[index % len(PALETTE)] for index in order])
+        else:
+            ax.bar(labels, values, color=[PALETTE[index % len(PALETTE)] for index in range(len(values))])
+            ax.tick_params(axis="x", rotation=35)
+        ax.set_ylabel("value")
+    elif family == "errorbar":
+        errors = [numeric_value(row, "error", default=0.0) for row in parsed.rows]
+        ax.bar(labels, values, yerr=errors, color=PALETTE[: len(values)], capsize=4)
+        ax.tick_params(axis="x", rotation=35)
+        ax.set_ylabel("value")
+    elif family == "stacked-bar":
+        categories = sorted({row.get("category", "") for row in parsed.rows})
+        series = sorted({row.get("series", "") for row in parsed.rows})
+        bottoms = [0.0] * len(categories)
+        for series_index, series_name in enumerate(series):
+            series_values = [
+                sum(numeric_value(row, "value") for row in parsed.rows if row.get("category") == category and row.get("series") == series_name)
+                for category in categories
+            ]
+            ax.bar(categories, series_values, bottom=bottoms, label=series_name, color=PALETTE[series_index % len(PALETTE)])
+            bottoms = [bottom + value for bottom, value in zip(bottoms, series_values)]
+        ax.legend(frameon=False, fontsize=8)
+    elif family in {"line", "area", "dual-axis", "dumbbell", "radar"}:
+        xs = [numeric_value(row, "x", default=index) for index, row in enumerate(parsed.rows)]
+        ys = [_second_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+        ax.plot(xs, ys, marker="o", color=PALETTE[0], linewidth=2.2)
+        if family == "area":
+            ax.fill_between(xs, ys, min(ys or [0]), color=PALETTE[0], alpha=0.22)
+        if family == "dual-axis" and "line" in parsed.headers:
+            ax.plot(xs, [numeric_value(row, "line") for row in parsed.rows], marker="s", color=PALETTE[1], linewidth=2.0)
+        ax.set_xlabel("x")
+        ax.set_ylabel("value")
+    elif family in {"scatter", "correlation", "qq", "genome", "epigenome"}:
+        xs = [_first_numeric(row, parsed.headers, index) for index, row in enumerate(parsed.rows)]
+        ys = [_second_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+        ax.scatter(xs, ys, c=PALETTE[: len(xs)], s=float(options.get("pointSize", 64)), alpha=0.82, edgecolors="white")
+        if family in {"correlation", "qq"} and len(xs) > 1:
+            ax.plot([min(xs), max(xs)], [min(ys), max(ys)], color=PALETTE[1], linewidth=1.4, linestyle="--")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+    elif family in {"distribution", "density"}:
+        if "group" in parsed.headers and "value" in parsed.headers:
+            groups = sorted({row.get("group", "") for row in parsed.rows})
+            series = [[numeric_value(row, "value") for row in parsed.rows if row.get("group", "") == group] for group in groups]
+            ax.violinplot(series, showmeans=True)
+            ax.set_xticks(range(1, len(groups) + 1), groups)
+        else:
+            ax.hist(values, color=PALETTE[0], alpha=0.72, edgecolor="white")
+        ax.set_ylabel("value")
+    elif family in {"bubble", "enrichment"}:
+        ratios = [numeric_value(row, "ratio", default=index + 1) for index, row in enumerate(parsed.rows)]
+        sigs = [-math.log10(max(numeric_value(row, "pvalue", default=1.0), 1e-300)) for row in parsed.rows]
+        counts = [numeric_value(row, "count", default=1.0) for row in parsed.rows]
+        ax.scatter(ratios, sigs, s=[max(count, 1) * 22 for count in counts], c=PALETTE[: len(ratios)], alpha=0.74, edgecolors="white")
+        for row, x_value, y_value in zip(parsed.rows, ratios, sigs):
+            ax.annotate(row.get("term", "")[:18], (x_value, y_value), fontsize=7, xytext=(5, 2), textcoords="offset points")
+        ax.set_xlabel("ratio")
+        ax.set_ylabel("-log10(p)")
+    elif family in {"heatmap", "matrix"}:
+        if "row" in parsed.headers and "column" in parsed.headers:
+            rows = sorted({row.get("row", "") for row in parsed.rows})
+            columns = sorted({row.get("column", "") for row in parsed.rows})
+            matrix = [
+                [next((numeric_value(item, "value") for item in parsed.rows if item.get("row") == row and item.get("column") == column), 0.0) for column in columns]
+                for row in rows
+            ]
+        else:
+            columns = parsed.headers[1:]
+            rows = [row.get(parsed.headers[0], "") for row in parsed.rows]
+            matrix = [[numeric_value(row, column) for column in columns] for row in parsed.rows]
+        cmap = cmap_factory.from_list("hgatc_heat", ["#3a6ea5", "#f2f1e8", "#c94c4c"])
+        image = ax.imshow(matrix, cmap=cmap, aspect="auto")
+        ax.set_xticks(range(len(columns)), columns, rotation=35, ha="right")
+        ax.set_yticks(range(len(rows)), rows)
+        fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    elif family == "network":
+        nodes = sorted({row.get("source", "") for row in parsed.rows} | {row.get("target", "") for row in parsed.rows})
+        positions = {
+            node: (math.cos(math.tau * index / max(len(nodes), 1)), math.sin(math.tau * index / max(len(nodes), 1)))
+            for index, node in enumerate(nodes)
+        }
+        for row in parsed.rows:
+            source, target = row.get("source", ""), row.get("target", "")
+            if source in positions and target in positions:
+                ax.plot([positions[source][0], positions[target][0]], [positions[source][1], positions[target][1]], color="#9aa8a3", linewidth=1.2)
+        for index, node in enumerate(nodes):
+            ax.scatter([positions[node][0]], [positions[node][1]], s=360, color=PALETTE[index % len(PALETTE)], edgecolors="white")
+            ax.annotate(node[:10], positions[node], ha="center", va="center", fontsize=7, color="white", weight="bold")
+        ax.axis("off")
+    elif family == "forest":
+        effects = [numeric_value(row, "effect") for row in parsed.rows]
+        lows = [numeric_value(row, "low", default=effect * 0.85) for row, effect in zip(parsed.rows, effects)]
+        highs = [numeric_value(row, "high", default=effect * 1.15) for row, effect in zip(parsed.rows, effects)]
+        y_values = list(range(len(effects)))
+        ax.errorbar(effects, y_values, xerr=[[effect - low for effect, low in zip(effects, lows)], [high - effect for effect, high in zip(effects, highs)]], fmt="o", color=PALETTE[0], ecolor=PALETTE[0], capsize=4)
+        ax.axvline(float(options.get("referenceLine", 1.0)), color=PALETTE[1], linestyle="--")
+        ax.set_yticks(y_values, labels)
+        ax.set_xlabel("effect")
+    else:
+        ax.bar(labels, values, color=PALETTE[: len(values)])
 
 
 def _matplotlib_scatter(ax, parsed: ParsedTable, x_key: str, y_key: str) -> None:

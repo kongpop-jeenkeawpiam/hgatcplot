@@ -496,6 +496,14 @@ button:disabled,
   line-height: 1.45;
 }
 
+.source-link {
+  display: inline-flex;
+  margin-top: 10px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .loading-screen {
   display: grid;
   place-items: center;

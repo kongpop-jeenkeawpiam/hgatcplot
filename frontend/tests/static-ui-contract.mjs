@@ -20,6 +20,20 @@ test("app shell exposes the scientific plotting workflow", () => {
   assert.match(app, /TIFF/);
   assert.match(app, /SVG/);
   assert.match(app, /PDF/);
+  assert.match(app, /activeModule\.engine\.toUpperCase/);
+  assert.match(app, /activeModule\.sourceUrl/);
+});
+
+test("fallback catalog mirrors the expanded SRplot module contract", () => {
+  const fallback = read("src/fallbackModules.ts");
+
+  assert.match(fallback, /extraTemplates/);
+  assert.match(fallback, /motif-logo/);
+  assert.match(fallback, /maf-oncoplot/);
+  assert.match(fallback, /sourceUrl/);
+  assert.match(fallback, /Engine = PlotModule/);
+  assert.match(fallback, /"r"\]/);
+  assert.match(fallback, /aliases:/);
 });
 
 test("stylesheet keeps the interface dense and responsive", () => {
