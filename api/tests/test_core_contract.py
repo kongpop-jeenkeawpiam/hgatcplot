@@ -62,6 +62,29 @@ class ModuleRegistryContractTests(unittest.TestCase):
         self.assertTrue(all(module.engine in {"python", "r"} for module in modules))
         self.assertTrue(all(module.renderer_family for module in modules))
         self.assertGreaterEqual(sum(1 for module in modules if module.engine == "r"), 25)
+        valid_visual_kinds = {
+            "pie", "bar", "line", "scatter", "distribution", "density", "heatmap",
+            "matrix", "bubble", "enrichment", "forest", "survival", "roc", "pca",
+            "set", "network", "hierarchy", "funnel", "genome", "epigenome",
+            "pathway", "maf", "sequence", "calendar", "polar", "wordcloud",
+            "correlation", "qq", "radar", "area", "dual-axis", "dumbbell",
+            "volcano",
+        }
+        valid_quality = {"practical", "family", "r-only"}
+        self.assertTrue(all(module.visual_kind in valid_visual_kinds for module in modules))
+        self.assertTrue(all(module.renderer_quality in valid_quality for module in modules))
+        self.assertTrue(all(module.option_groups for module in modules))
+        self.assertEqual(get_module("volcano").renderer_quality, "practical")
+        self.assertEqual(get_module("heatmap").renderer_quality, "practical")
+        self.assertEqual(get_module("bubble").renderer_quality, "practical")
+        self.assertEqual(get_module("violin").renderer_quality, "practical")
+        self.assertEqual(get_module("pie").renderer_quality, "practical")
+        self.assertEqual(get_module("line").renderer_quality, "practical")
+        self.assertEqual(get_module("scatter").renderer_quality, "practical")
+        self.assertEqual(get_module("pca").renderer_quality, "practical")
+        self.assertEqual(get_module("roc").renderer_quality, "practical")
+        self.assertEqual(get_module("km-survival").renderer_quality, "practical")
+        self.assertEqual(get_module("forest-plot").renderer_quality, "practical")
 
     def test_module_manifest_contains_demo_data_and_required_columns(self):
         module = get_module("volcano")
@@ -83,6 +106,18 @@ class ModuleRegistryContractTests(unittest.TestCase):
 
 
 class RendererContractTests(unittest.TestCase):
+    def test_non_bar_visual_kinds_do_not_route_to_generic_bar_renderer(self):
+        import app.renderers as renderers
+
+        bar_like = {"bar", "errorbar", "stacked-bar"}
+        for module in list_modules():
+            if module.engine == "r":
+                continue
+            with self.subTest(module=module.slug):
+                renderer = renderers._select_renderer(module)
+                if module.renderer_family not in bar_like and module.visual_kind != "bar":
+                    self.assertIsNot(renderer, renderers._render_generic)
+
     def test_each_module_demo_renders_all_export_artifacts(self):
         r_available = check_r_engine().available
         skipped_r_modules = []

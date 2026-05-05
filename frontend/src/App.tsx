@@ -1,19 +1,34 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
+  ChartArea as AreaChart,
   BarChart3,
+  Binary,
   BookOpen,
+  Boxes,
   CheckCircle2,
+  CircleDot,
+  Clock3,
   Database,
   Download,
   FileText,
   FlaskConical,
+  GitFork,
+  Grid3X3,
   History,
   ImageDown,
+  LineChart,
   Loader2,
+  Network,
+  PieChart,
   Play,
+  Radar,
+  ScatterChart,
   Search,
   Settings2,
+  Table2,
+  Trees,
   Upload
 } from "lucide-react";
 import { artifactHref, createJob, fetchHistory, fetchModules, precheck } from "./api";
@@ -27,6 +42,52 @@ const exportLabels: Record<ExportFormat, string> = {
   svg: "SVG",
   pdf: "PDF"
 };
+
+const visualKindIcons = {
+  pie: PieChart,
+  bar: BarChart3,
+  line: LineChart,
+  scatter: ScatterChart,
+  distribution: Activity,
+  density: Activity,
+  heatmap: Grid3X3,
+  matrix: Table2,
+  bubble: CircleDot,
+  enrichment: CircleDot,
+  forest: GitFork,
+  survival: Clock3,
+  roc: Activity,
+  pca: ScatterChart,
+  set: Boxes,
+  network: Network,
+  hierarchy: Trees,
+  funnel: BarChart3,
+  genome: Binary,
+  epigenome: Binary,
+  pathway: GitFork,
+  maf: Grid3X3,
+  sequence: Binary,
+  calendar: Grid3X3,
+  polar: Radar,
+  wordcloud: Activity,
+  correlation: ScatterChart,
+  qq: ScatterChart,
+  radar: Radar,
+  area: AreaChart,
+  "dual-axis": LineChart,
+  dumbbell: Activity,
+  volcano: ScatterChart
+} satisfies Record<PlotModule["visualKind"], typeof BarChart3>;
+
+function ModuleIcon({ module, size = 16 }: { module: PlotModule; size?: number }) {
+  const Icon = visualKindIcons[module.visualKind] ?? BarChart3;
+  return <Icon size={size} aria-hidden="true" />;
+}
+
+function fieldsForGroup(module: PlotModule, groupFields: string[]) {
+  const wanted = new Set(groupFields);
+  return module.optionFields.filter((field) => wanted.has(field.key));
+}
 
 function getSessionId() {
   const key = "hgatcplot-session-id";
@@ -184,7 +245,7 @@ export default function App() {
                   onClick={() => selectModule(module)}
                   key={module.slug}
                 >
-                  <BarChart3 size={16} />
+                  <ModuleIcon module={module} />
                   <span>{module.title}</span>
                 </button>
               ))}
@@ -201,6 +262,8 @@ export default function App() {
             <p>{activeModule.description}</p>
           </div>
           <div className="status-strip">
+            <span><ModuleIcon module={activeModule} size={15} /> {activeModule.visualKind}</span>
+            <span><CheckCircle2 size={15} /> {activeModule.rendererQuality}</span>
             <span><Database size={15} /> {activeModule.requiredColumns.length} columns</span>
             <span><FlaskConical size={15} /> {activeModule.engine.toUpperCase()}</span>
             <span><ImageDown size={15} /> PNG TIFF SVG PDF</span>
@@ -276,25 +339,39 @@ export default function App() {
               <Settings2 size={19} />
             </div>
 
-            <div className="option-grid">
-              {activeModule.optionFields.map((field) => (
-                <label key={field.key} className="option-field">
-                  <span>{field.label}</span>
-                  {field.kind === "select" ? (
-                    <select value={String(options[field.key] ?? field.default)} onChange={(event) => setOptions({ ...options, [field.key]: event.target.value })}>
-                      {(field.choices ?? []).map((choice) => (
-                        <option value={choice} key={choice}>{choice}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type={field.kind === "number" ? "number" : field.kind === "color" ? "color" : "text"}
-                      value={String(options[field.key] ?? field.default)}
-                      onChange={(event) => setOptions({ ...options, [field.key]: field.kind === "number" ? Number(event.target.value) : event.target.value })}
-                    />
-                  )}
-                </label>
-              ))}
+            <div className="option-groups">
+              {activeModule.optionGroups.map((group) => {
+                const fields = fieldsForGroup(activeModule, group.fields);
+                return (
+                  <section className="option-group" key={group.key}>
+                    <h3>{group.label}</h3>
+                    {fields.length ? (
+                      <div className="option-grid">
+                        {fields.map((field) => (
+                          <label key={field.key} className="option-field">
+                            <span>{field.label}</span>
+                            {field.kind === "select" ? (
+                              <select value={String(options[field.key] ?? field.default)} onChange={(event) => setOptions({ ...options, [field.key]: event.target.value })}>
+                                {(field.choices ?? []).map((choice) => (
+                                  <option value={choice} key={choice}>{choice}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type={field.kind === "number" ? "number" : field.kind === "color" ? "color" : "text"}
+                                value={String(options[field.key] ?? field.default)}
+                                onChange={(event) => setOptions({ ...options, [field.key]: field.kind === "number" ? Number(event.target.value) : event.target.value })}
+                              />
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="export-note">Exports are generated as PNG, TIFF, SVG, and PDF.</div>
+                    )}
+                  </section>
+                );
+              })}
             </div>
 
             <div className="messages" aria-live="polite">
@@ -327,7 +404,7 @@ export default function App() {
                 <img src={artifactHref(job.previewUrl)} alt={`${job.moduleTitle} preview`} />
               ) : (
                 <div className="empty-preview">
-                  <BarChart3 size={42} />
+                  <ModuleIcon module={activeModule} size={42} />
                   <span>Run Precheck, then Generate Plot.</span>
                 </div>
               )}

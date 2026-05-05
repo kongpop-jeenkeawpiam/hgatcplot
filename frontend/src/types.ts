@@ -8,6 +8,22 @@ export interface OptionField {
   choices?: string[];
 }
 
+export type VisualKind =
+  | "pie" | "bar" | "line" | "scatter" | "distribution" | "density" | "heatmap"
+  | "matrix" | "bubble" | "enrichment" | "forest" | "survival" | "roc" | "pca"
+  | "set" | "network" | "hierarchy" | "funnel" | "genome" | "epigenome"
+  | "pathway" | "maf" | "sequence" | "calendar" | "polar" | "wordcloud"
+  | "correlation" | "qq" | "radar" | "area" | "dual-axis" | "dumbbell"
+  | "volcano";
+
+export type RendererQuality = "practical" | "family" | "r-only";
+
+export interface OptionGroup {
+  key: string;
+  label: string;
+  fields: string[];
+}
+
 export interface PlotModule {
   slug: string;
   title: string;
@@ -22,6 +38,9 @@ export interface PlotModule {
   sourceUrl: string;
   engine: "python" | "r";
   rendererFamily: string;
+  visualKind: VisualKind;
+  rendererQuality: RendererQuality;
+  optionGroups: OptionGroup[];
   aliases: string[];
 }
 

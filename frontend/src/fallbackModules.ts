@@ -223,6 +223,59 @@ const profiles = {
   }
 } satisfies Record<string, Profile>;
 
+const priorityPracticalSlugs = new Set([
+  "volcano", "heatmap", "bubble", "violin", "pie", "up-down-bar", "line",
+  "scatter", "pca", "principal-components-analysis", "roc", "km-survival",
+  "forest-plot"
+]);
+
+const visualKindByFamily: Partial<Record<keyof typeof profiles, PlotModule["visualKind"]>> = {
+  errorbar: "bar",
+  "stacked-bar": "bar",
+  enrichment: "bubble",
+  survival: "survival",
+  manhattan: "genome",
+  volcano: "volcano"
+};
+
+const optionGroupLabels = {
+  figure: "Figure size",
+  text: "Text",
+  font: "Font",
+  colors: "Colors",
+  cutoff: "Cutoff/Scale",
+  labels: "Labels",
+  grid: "Grid",
+  export: "Export"
+} as const;
+
+const optionFieldGroups: Record<string, keyof typeof optionGroupLabels> = {
+  width: "figure",
+  height: "figure",
+  title: "text",
+  fontFamily: "font",
+  primaryColor: "colors",
+  accentColor: "colors",
+  upColor: "colors",
+  downColor: "colors",
+  lowColor: "colors",
+  highColor: "colors",
+  fcCutoff: "cutoff",
+  pCutoff: "cutoff",
+  threshold: "cutoff",
+  scoreCutoff: "cutoff",
+  referenceLine: "cutoff",
+  topGenes: "cutoff",
+  maxWords: "cutoff",
+  legend: "labels",
+  showPercent: "labels",
+  showPoints: "labels",
+  confidence: "labels",
+  smooth: "grid",
+  orientation: "grid",
+  pointSize: "grid"
+};
+
 const seedTemplates: TemplateSpec[] = [
   ["pie", "2D Pie Plot", "Basic plot", 1, "pie", "python"],
   ["up-down-bar", "Gene Up/Down Bar", "Basic plot", 1, "bar", "python"],
@@ -362,8 +415,36 @@ function aliases(title: string, slug: string) {
   return Array.from(new Set([slug, title.toLowerCase(), title.toLowerCase().replace(/[/-]/g, " ")]));
 }
 
+function visualKind(slug: string, family: keyof typeof profiles): PlotModule["visualKind"] {
+  if (slug === "volcano") return "volcano";
+  return visualKindByFamily[family] ?? (family as PlotModule["visualKind"]);
+}
+
+function rendererQuality(slug: string, engine: Engine): PlotModule["rendererQuality"] {
+  if (priorityPracticalSlugs.has(slug)) return "practical";
+  if (engine === "r") return "r-only";
+  return "family";
+}
+
+function optionGroups(fields: PlotModule["optionFields"]): PlotModule["optionGroups"] {
+  const grouped = new Map<keyof typeof optionGroupLabels, string[]>();
+  for (const field of fields) {
+    const key = optionFieldGroups[field.key] ?? "grid";
+    grouped.set(key, [...(grouped.get(key) ?? []), field.key]);
+  }
+  if (!grouped.has("export")) grouped.set("export", []);
+  return Object.entries(optionGroupLabels)
+    .filter(([key]) => grouped.has(key as keyof typeof optionGroupLabels))
+    .map(([key, label]) => ({
+      key,
+      label,
+      fields: grouped.get(key as keyof typeof optionGroupLabels) ?? []
+    }));
+}
+
 function moduleFromSpec([slug, title, category, page, family, engine = "python"]: TemplateSpec): PlotModule {
   const profile: Profile = profiles[family];
+  const fields = [...commonFields, ...(profile.optionFields ?? [])];
   return {
     slug,
     title,
@@ -371,13 +452,16 @@ function moduleFromSpec([slug, title, category, page, family, engine = "python"]
     description: profile.description,
     requiredColumns: profile.requiredColumns,
     defaultOptions: { width: 900, height: 620, fontFamily: "Arial", title, ...(profile.defaults ?? {}) },
-    optionFields: [...commonFields, ...(profile.optionFields ?? [])],
+    optionFields: fields,
     demoData: profile.demoData,
     citation,
     exportFormats: ["png", "tiff", "svg", "pdf"],
     sourceUrl: sourceUrl(page, slug),
     engine,
     rendererFamily: family,
+    visualKind: visualKind(slug, family),
+    rendererQuality: rendererQuality(slug, engine),
+    optionGroups: optionGroups(fields),
     aliases: aliases(title, slug)
   };
 }

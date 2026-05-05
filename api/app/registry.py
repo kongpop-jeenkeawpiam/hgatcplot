@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 
@@ -14,6 +14,13 @@ class OptionField:
     kind: str
     default: Any
     choices: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class OptionGroup:
+    key: str
+    label: str
+    fields: list[str]
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,9 @@ class PlotModule:
     source_url: str
     engine: str
     renderer_family: str
+    visual_kind: str = ""
+    renderer_quality: str = ""
+    option_groups: list[OptionGroup] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     r_packages: list[str] = field(default_factory=list)
     export_formats: list[str] = field(default_factory=lambda: EXPORT_FORMATS.copy())
@@ -55,6 +65,83 @@ COLOR_OPTIONS = [
     OptionField("primaryColor", "Primary color", "color", "#2f6f73"),
     OptionField("accentColor", "Accent color", "color", "#d36f45"),
 ]
+
+PRIORITY_PRACTICAL_SLUGS = {
+    "volcano", "heatmap", "bubble", "violin", "pie", "up-down-bar", "line",
+    "scatter", "pca", "principal-components-analysis", "roc", "km-survival",
+    "forest-plot",
+}
+
+VISUAL_KIND_BY_FAMILY = {
+    "errorbar": "bar",
+    "stacked-bar": "bar",
+    "enrichment": "bubble",
+    "survival": "survival",
+}
+
+OPTION_GROUP_LABELS = {
+    "figure": "Figure size",
+    "text": "Text",
+    "font": "Font",
+    "colors": "Colors",
+    "cutoff": "Cutoff/Scale",
+    "labels": "Labels",
+    "grid": "Grid",
+    "export": "Export",
+}
+
+OPTION_FIELD_GROUPS = {
+    "width": "figure",
+    "height": "figure",
+    "title": "text",
+    "fontFamily": "font",
+    "primaryColor": "colors",
+    "accentColor": "colors",
+    "upColor": "colors",
+    "downColor": "colors",
+    "lowColor": "colors",
+    "highColor": "colors",
+    "fcCutoff": "cutoff",
+    "pCutoff": "cutoff",
+    "threshold": "cutoff",
+    "scoreCutoff": "cutoff",
+    "referenceLine": "cutoff",
+    "topGenes": "cutoff",
+    "maxWords": "cutoff",
+    "legend": "labels",
+    "showPercent": "labels",
+    "showPoints": "labels",
+    "confidence": "labels",
+    "smooth": "grid",
+    "orientation": "grid",
+    "pointSize": "grid",
+}
+
+
+def _visual_kind(slug: str, family: str) -> str:
+    if slug == "volcano":
+        return "volcano"
+    return VISUAL_KIND_BY_FAMILY.get(family, family)
+
+
+def _renderer_quality(slug: str, engine: str) -> str:
+    if slug in PRIORITY_PRACTICAL_SLUGS:
+        return "practical"
+    if engine == "r":
+        return "r-only"
+    return "family"
+
+
+def _option_groups(fields: list[OptionField]) -> list[OptionGroup]:
+    grouped: dict[str, list[str]] = {}
+    for option_field in fields:
+        grouped.setdefault(OPTION_FIELD_GROUPS.get(option_field.key, "grid"), []).append(option_field.key)
+    grouped.setdefault("export", [])
+    return [
+        OptionGroup(key=key, label=OPTION_GROUP_LABELS[key], fields=grouped[key])
+        for key in OPTION_GROUP_LABELS
+        if key in grouped
+    ]
 
 FAMILY_PROFILES: dict[str, FamilyProfile] = {
     "pie": FamilyProfile(
@@ -301,6 +388,9 @@ def module_to_dict(module: PlotModule) -> dict[str, Any]:
         "sourceUrl": module.source_url,
         "engine": module.engine,
         "rendererFamily": module.renderer_family,
+        "visualKind": module.visual_kind,
+        "rendererQuality": module.renderer_quality,
+        "optionGroups": [group.__dict__ for group in module.option_groups],
         "aliases": module.aliases,
     }
 
@@ -340,6 +430,7 @@ def _template(
     r_packages: list[str] | None = None,
 ) -> PlotModule:
     profile = FAMILY_PROFILES[family]
+    option_fields = COMMON_OPTIONS + profile.option_fields
     return PlotModule(
         slug=slug,
         title=title,
@@ -347,12 +438,15 @@ def _template(
         description=description or profile.description,
         required_columns=profile.required_columns,
         default_options=_options(title=title, **profile.defaults),
-        option_fields=COMMON_OPTIONS + profile.option_fields,
+        option_fields=option_fields,
         demo_data=profile.demo_data,
         citation=CITATION,
         source_url=_source_url(page, slug),
         engine=engine,
         renderer_family=family,
+        visual_kind=_visual_kind(slug, family),
+        renderer_quality=_renderer_quality(slug, engine),
+        option_groups=_option_groups(option_fields),
         aliases=_aliases(title, slug, aliases),
         r_packages=r_packages or [],
     )
@@ -582,7 +676,16 @@ def _build_modules() -> tuple[PlotModule, ...]:
         _template(slug, title, category, page, family, engine)
         for slug, title, category, page, family, engine in EXTRA_TEMPLATES
     )
-    return tuple(modules)
+    return tuple(_with_manifest_metadata(module) for module in modules)
+
+
+def _with_manifest_metadata(module: PlotModule) -> PlotModule:
+    return replace(
+        module,
+        visual_kind=module.visual_kind or _visual_kind(module.slug, module.renderer_family),
+        renderer_quality=module.renderer_quality or _renderer_quality(module.slug, module.engine),
+        option_groups=module.option_groups or _option_groups(module.option_fields),
+    )
 
 
 MODULES: tuple[PlotModule, ...] = _build_modules()

@@ -22,6 +22,15 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(modules.status_code, 200)
         self.assertIn("Transcriptome", modules.json()["groups"])
         self.assertEqual(sum(len(items) for items in modules.json()["groups"].values()), 125)
+        volcano_payload = next(
+            item
+            for items in modules.json()["groups"].values()
+            for item in items
+            if item["slug"] == "volcano"
+        )
+        self.assertEqual(volcano_payload["visualKind"], "volcano")
+        self.assertEqual(volcano_payload["rendererQuality"], "practical")
+        self.assertTrue(volcano_payload["optionGroups"])
 
         precheck = self.client.post(
             "/api/modules/volcano/precheck",
@@ -61,6 +70,9 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(payload["engine"], "r")
         self.assertIn("sourceUrl", payload)
         self.assertIn("motif-logo", payload["aliases"])
+        self.assertIn("visualKind", payload)
+        self.assertIn("rendererQuality", payload)
+        self.assertIn("optionGroups", payload)
 
     def test_precheck_reports_missing_columns_and_r_engine_status(self):
         response = self.client.post(

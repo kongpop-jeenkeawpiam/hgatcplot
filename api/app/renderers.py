@@ -43,7 +43,7 @@ def render_plot(slug: str, parsed: ParsedTable, options: dict, output_dir: Path)
         return RenderResult(r_result.status, r_result.artifacts, r_result.warnings, r_result.errors)
 
     svg = SVGCanvas(width, height, title, str(options.get("fontFamily", "Arial")))
-    renderer = RENDERERS.get(slug) or FAMILY_RENDERERS.get(module.renderer_family, _render_generic)
+    renderer = _select_renderer(module)
     renderer(svg, parsed, {**module.default_options, **options}, title)
     svg_text = svg.finish()
 
@@ -317,6 +317,22 @@ def _render_generic(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: s
         svg.text(px + bar_width / 2, y + h + 20, labels[index][:8], 10, anchor="middle")
 
 
+def _render_family_placeholder(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.axes(parsed.headers[0] if parsed.headers else "x", "value")
+    labels = [row.get(parsed.headers[0], f"Row {index + 1}") for index, row in enumerate(parsed.rows)]
+    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+    points = []
+    low, high = min(values or [0]), max(values or [1])
+    for index, value in enumerate(values):
+        px = x + (index + 0.5) * w / max(len(values), 1)
+        py = y + h - _normalize(value, low, high) * h
+        points.append((px, py))
+        svg.circle(px, py, 6, PALETTE[index % len(PALETTE)])
+        svg.text(px, y + h + 20, labels[index][:8], 10, anchor="middle")
+    if len(points) > 1:
+        svg.polyline(points, PALETTE[0], 2.5)
+
+
 def _render_generic_line(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
     x, y, w, h = svg.axes("x", "value")
     xs = [_first_numeric(row, parsed.headers, index) for index, row in enumerate(parsed.rows)]
@@ -470,6 +486,20 @@ FAMILY_RENDERERS: dict[str, Callable[[SVGCanvas, ParsedTable, dict, str], None]]
     "maf": _render_generic,
     "pca": _render_pca,
 }
+
+
+def _select_renderer(module) -> Callable[[SVGCanvas, ParsedTable, dict, str], None]:
+    renderer = RENDERERS.get(module.slug)
+    if renderer:
+        return renderer
+    renderer = FAMILY_RENDERERS.get(module.renderer_family)
+    if renderer:
+        if renderer is _render_generic and module.renderer_family not in {"bar", "errorbar", "stacked-bar"} and module.visual_kind != "bar":
+            return _render_family_placeholder
+        return renderer
+    if module.visual_kind == "bar":
+        return _render_generic
+    return _render_family_placeholder
 
 
 def _scale_pair(raw_x: float, raw_y: float, xs: list[float], ys: list[float], x: float, y: float, w: float, h: float) -> tuple[float, float]:

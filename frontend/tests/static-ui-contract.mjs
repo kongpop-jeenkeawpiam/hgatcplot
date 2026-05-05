@@ -22,6 +22,10 @@ test("app shell exposes the scientific plotting workflow", () => {
   assert.match(app, /PDF/);
   assert.match(app, /activeModule\.engine\.toUpperCase/);
   assert.match(app, /activeModule\.sourceUrl/);
+  assert.match(app, /visualKindIcons/);
+  assert.match(app, /ModuleIcon/);
+  assert.match(app, /activeModule\.optionGroups/);
+  assert.doesNotMatch(app, /<BarChart3 size=\{16\}/);
 });
 
 test("fallback catalog mirrors the expanded SRplot module contract", () => {
@@ -34,6 +38,10 @@ test("fallback catalog mirrors the expanded SRplot module contract", () => {
   assert.match(fallback, /Engine = PlotModule/);
   assert.match(fallback, /"r"\]/);
   assert.match(fallback, /aliases:/);
+  assert.match(fallback, /visualKind/);
+  assert.match(fallback, /rendererQuality/);
+  assert.match(fallback, /optionGroups/);
+  assert.match(fallback, /priorityPracticalSlugs/);
 });
 
 test("stylesheet keeps the interface dense and responsive", () => {
@@ -42,5 +50,7 @@ test("stylesheet keeps the interface dense and responsive", () => {
   assert.match(css, /grid-template-columns:\s*280px 1fr/);
   assert.match(css, /@media \(max-width: 900px\)/);
   assert.match(css, /--accent/);
+  assert.match(css, /\.option-groups/);
+  assert.match(css, /\.option-group/);
   assert.doesNotMatch(css, /border-radius:\s*(2[0-9]|[3-9][0-9])px/);
 });
