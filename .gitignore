@@ -1,0 +1,12 @@
+api/storage/
+api/.deps/
+api/.venv/
+api/vendor/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+.env
+*.pyc
+__pycache__/
+/structure/
