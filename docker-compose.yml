@@ -1,0 +1,39 @@
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    environment:
+      HGATCPLOT_RSCRIPT: R
+      HGATCPLOT_R_TIMEOUT_SECONDS: "45"
+    ports:
+      - "8000:8000"
+    volumes:
+      - api-storage:/app/storage
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      VITE_API_BASE_URL: http://127.0.0.1:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  api-storage:

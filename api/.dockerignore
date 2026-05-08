@@ -1,0 +1,6 @@
+.deps
+.venv
+vendor
+storage
+__pycache__
+*.pyc

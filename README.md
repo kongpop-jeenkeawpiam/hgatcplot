@@ -44,6 +44,24 @@ npm.cmd run dev
 
 Open `http://127.0.0.1:5173`.
 
+## Docker Setup
+
+Build and run both services:
+
+```bash
+docker compose up --build
+```
+
+Open `http://127.0.0.1:5173`.
+
+The API is exposed at `http://127.0.0.1:8000`, and its health endpoint is `http://127.0.0.1:8000/api/health`. The API image installs R and sets `HGATCPLOT_RSCRIPT=R` so R-backed templates can render inside the container.
+
+Stop the stack:
+
+```bash
+docker compose down
+```
+
 ## Verification
 
 ```powershell

@@ -1,0 +1,16 @@
+.git
+.agents
+.codex
+structure
+test-tmp-local
+api/.deps
+api/.venv
+api/vendor
+api/storage
+frontend/node_modules
+frontend/dist
+frontend/.vite
+*.pyc
+__pycache__
+*.tsbuildinfo
+.env
