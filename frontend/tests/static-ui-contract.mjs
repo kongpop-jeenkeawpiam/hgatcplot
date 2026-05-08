@@ -41,7 +41,8 @@ test("fallback catalog mirrors the expanded SRplot module contract", () => {
   assert.match(fallback, /visualKind/);
   assert.match(fallback, /rendererQuality/);
   assert.match(fallback, /optionGroups/);
-  assert.match(fallback, /priorityPracticalSlugs/);
+  assert.match(fallback, /plot-specific-python/);
+  assert.match(fallback, /plot-specific-r/);
 });
 
 test("stylesheet keeps the interface dense and responsive", () => {

@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import base64
 import math
-import struct
-import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from app.parser import ParsedTable, numeric_value
-from app.registry import get_module
+from app.registry import get_module, list_modules
 from app.r_engine import run_r_renderer
 
 
@@ -22,6 +19,13 @@ class RenderResult:
     artifacts: dict[str, str]
     warnings: list[str]
     errors: list[str]
+
+
+@dataclass(frozen=True)
+class RendererSpec:
+    backend: str
+    family: str
+    svg_renderer: Callable[["SVGCanvas", ParsedTable, dict, str], None]
 
 
 def render_plot(slug: str, parsed: ParsedTable, options: dict, output_dir: Path) -> RenderResult:
@@ -55,11 +59,12 @@ def render_plot(slug: str, parsed: ParsedTable, options: dict, output_dir: Path)
     }
     if not _write_matplotlib_artifacts(slug, module.renderer_family, parsed, {**module.default_options, **options}, artifacts, width, height, title):
         Path(artifacts["svg"]).write_text(svg_text, encoding="utf-8")
-        raster_width = min(width, 420)
-        raster_height = min(height, 300)
-        _write_png(Path(artifacts["png"]), raster_width, raster_height, _theme_pixels(raster_width, raster_height, module.category))
-        _write_tiff(Path(artifacts["tiff"]), raster_width, raster_height)
-        _write_pdf(Path(artifacts["pdf"]), title, module.title)
+        return RenderResult(
+            "failed",
+            {},
+            parsed.warnings,
+            ["Plot-specific export failed. Matplotlib must be available to generate PNG, TIFF, SVG, and PDF artifacts."],
+        )
     return RenderResult("succeeded", artifacts, parsed.warnings, [])
 
 
@@ -317,6 +322,115 @@ def _render_generic(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: s
         svg.text(px + bar_width / 2, y + h + 20, labels[index][:8], 10, anchor="middle")
 
 
+def _render_bar_family(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.axes(parsed.headers[0] if parsed.headers else "label", "value")
+    labels = [row.get(parsed.headers[0], f"Row {index + 1}") for index, row in enumerate(parsed.rows)]
+    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+    max_abs = max([abs(value) for value in values] + [1.0])
+    baseline = y + h if min(values or [0]) >= 0 else y + h / 2
+    bar_width = w / max(len(values), 1) * 0.58
+    for index, value in enumerate(values):
+        px = x + (index + 0.22) * (w / max(len(values), 1))
+        bar_height = abs(value) / max_abs * (h - 22 if baseline == y + h else h / 2 - 12)
+        py = baseline - bar_height if value >= 0 else baseline
+        svg.rect(px, py, bar_width, bar_height, PALETTE[index % len(PALETTE)], radius=3, opacity=0.86)
+        svg.text(px + bar_width / 2, y + h + 20, labels[index][:8], 10, anchor="middle")
+    svg.line(x, baseline, x + w, baseline, "#435a54", 1.2)
+
+
+def _render_set_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    _render_pie(svg, parsed, options, title)
+
+
+def _render_hierarchy_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.plot_area()
+    labels = [row.get("child", row.get(parsed.headers[0], f"Node {index + 1}")) for index, row in enumerate(parsed.rows)]
+    values = [max(_first_numeric(row, parsed.headers, index + 1), 0.0) for index, row in enumerate(parsed.rows)]
+    total = sum(values) or 1.0
+    cursor = x
+    for index, value in enumerate(values):
+        cell_w = w * value / total
+        svg.rect(cursor, y, cell_w - 2, h, PALETTE[index % len(PALETTE)], opacity=0.72, radius=4)
+        if cell_w > 44:
+            svg.text(cursor + 8, y + 28, labels[index][:16], 11, "#ffffff", weight="700")
+        cursor += cell_w
+
+
+def _render_funnel_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.axes("stage", "value")
+    labels = [row.get("stage", row.get(parsed.headers[0], f"Stage {index + 1}")) for index, row in enumerate(parsed.rows)]
+    values = [max(_first_numeric(row, parsed.headers, index + 1), 0.0) for index, row in enumerate(parsed.rows)]
+    max_value = max(values or [1.0])
+    row_h = h / max(len(values), 1) * 0.64
+    for index, value in enumerate(values):
+        bar_w = w * value / max_value
+        px = x + (w - bar_w) / 2
+        py = y + index * h / max(len(values), 1) + 8
+        svg.rect(px, py, bar_w, row_h, PALETTE[index % len(PALETTE)], opacity=0.82, radius=4)
+        svg.text(x + w / 2, py + row_h * 0.62, labels[index][:18], 11, "#ffffff", anchor="middle", weight="700")
+
+
+def _render_calendar_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.plot_area()
+    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+    low, high = min(values or [0]), max(values or [1])
+    columns = min(14, max(len(values), 1))
+    cell = min(w / columns, h / max(math.ceil(len(values) / columns), 1)) - 3
+    for index, row in enumerate(parsed.rows):
+        px = x + (index % columns) * (cell + 3)
+        py = y + (index // columns) * (cell + 3)
+        color = _blend("#eaf2ee", "#9fc3b5", "#2f6f73", _normalize(values[index], low, high))
+        svg.rect(px, py, cell, cell, color, radius=3)
+        if cell > 28:
+            svg.text(px + cell / 2, py + cell / 2 + 4, row.get(parsed.headers[0], "")[-2:], 9, "#172623", anchor="middle")
+
+
+def _render_polar_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    _render_pie(svg, parsed, options, title)
+
+
+def _render_pathway_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    _render_bar_family(svg, parsed, options, title)
+
+
+def _render_sequence_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.axes("position", "score")
+    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+    labels = [row.get("symbol", row.get(parsed.headers[0], "")) for row in parsed.rows]
+    max_value = max(values or [1.0])
+    for index, value in enumerate(values):
+        px = x + (index + 0.5) * w / max(len(values), 1)
+        bar_h = value / max_value * (h - 24)
+        svg.rect(px - 12, y + h - bar_h, 24, bar_h, PALETTE[index % len(PALETTE)], radius=2)
+        svg.text(px, y + h - bar_h - 8, labels[index][:1], 13, anchor="middle", weight="700")
+
+
+def _render_maf_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.plot_area()
+    genes = sorted({row.get("gene", "") for row in parsed.rows})
+    samples = sorted({row.get("sample", "") for row in parsed.rows})
+    cell_w = w / max(len(samples), 1)
+    cell_h = h / max(len(genes), 1)
+    for row in parsed.rows:
+        if row.get("gene", "") in genes and row.get("sample", "") in samples:
+            gx = samples.index(row.get("sample", ""))
+            gy = genes.index(row.get("gene", ""))
+            svg.rect(x + gx * cell_w, y + gy * cell_h, cell_w - 2, cell_h - 2, PALETTE[gy % len(PALETTE)], radius=2)
+    for index, gene in enumerate(genes):
+        svg.text(x - 8, y + index * cell_h + cell_h * 0.62, gene[:10], 10, anchor="end")
+
+
+def _render_wordcloud_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
+    x, y, w, h = svg.plot_area()
+    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+    low, high = min(values or [0]), max(values or [1])
+    for index, row in enumerate(parsed.rows[:24]):
+        size = int(12 + _normalize(values[index], low, high) * 22)
+        px = x + (index % 4) * w / 4 + 18
+        py = y + (index // 4) * 42 + 30
+        svg.text(px, min(py, y + h - 10), row.get(parsed.headers[0], "")[:14], size, PALETTE[index % len(PALETTE)], weight="700")
+
+
 def _render_family_placeholder(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
     x, y, w, h = svg.axes(parsed.headers[0] if parsed.headers else "x", "value")
     labels = [row.get(parsed.headers[0], f"Row {index + 1}") for index, row in enumerate(parsed.rows)]
@@ -454,9 +568,9 @@ RENDERERS: dict[str, Callable[[SVGCanvas, ParsedTable, dict, str], None]] = {
 
 FAMILY_RENDERERS: dict[str, Callable[[SVGCanvas, ParsedTable, dict, str], None]] = {
     "pie": _render_pie,
-    "bar": _render_generic,
-    "errorbar": _render_generic,
-    "stacked-bar": _render_generic,
+    "bar": _render_bar_family,
+    "errorbar": _render_bar_family,
+    "stacked-bar": _render_bar_family,
     "line": _render_generic_line,
     "area": _render_generic_line,
     "dual-axis": _render_generic_line,
@@ -469,37 +583,50 @@ FAMILY_RENDERERS: dict[str, Callable[[SVGCanvas, ParsedTable, dict, str], None]]
     "enrichment": _render_bubble,
     "heatmap": _render_generic_heatmap,
     "matrix": _render_long_matrix,
-    "set": _render_generic,
+    "set": _render_set_plot,
     "network": _render_generic_network,
-    "hierarchy": _render_generic,
-    "funnel": _render_generic,
+    "hierarchy": _render_hierarchy_plot,
+    "funnel": _render_funnel_plot,
     "dumbbell": _render_generic_line,
     "radar": _render_generic_line,
-    "polar": _render_generic,
-    "calendar": _render_generic,
+    "polar": _render_polar_plot,
+    "calendar": _render_calendar_plot,
     "forest": _render_generic_line,
     "genome": _render_generic_scatter,
     "epigenome": _render_generic_scatter,
-    "pathway": _render_generic,
-    "sequence": _render_generic,
-    "wordcloud": _render_generic,
-    "maf": _render_generic,
+    "pathway": _render_pathway_plot,
+    "sequence": _render_sequence_plot,
+    "wordcloud": _render_wordcloud_plot,
+    "maf": _render_maf_plot,
     "pca": _render_pca,
 }
 
 
+def _build_renderer_specs() -> dict[str, RendererSpec]:
+    specs: dict[str, RendererSpec] = {}
+    for module in list_modules():
+        renderer = RENDERERS.get(module.slug) or FAMILY_RENDERERS.get(module.renderer_family)
+        if renderer is None:
+            renderer = _render_bar_family if module.visual_kind == "bar" else _render_generic_scatter
+        specs[module.slug] = RendererSpec(
+            backend=module.engine,
+            family=module.renderer_family,
+            svg_renderer=renderer,
+        )
+    return specs
+
+
+RENDERER_SPECS = _build_renderer_specs()
+
+
 def _select_renderer(module) -> Callable[[SVGCanvas, ParsedTable, dict, str], None]:
-    renderer = RENDERERS.get(module.slug)
-    if renderer:
+    try:
+        return RENDERER_SPECS[module.slug].svg_renderer
+    except KeyError:
+        renderer = FAMILY_RENDERERS.get(module.renderer_family)
+        if renderer is None:
+            raise KeyError(f"No renderer is registered for {module.slug}.")
         return renderer
-    renderer = FAMILY_RENDERERS.get(module.renderer_family)
-    if renderer:
-        if renderer is _render_generic and module.renderer_family not in {"bar", "errorbar", "stacked-bar"} and module.visual_kind != "bar":
-            return _render_family_placeholder
-        return renderer
-    if module.visual_kind == "bar":
-        return _render_generic
-    return _render_family_placeholder
 
 
 def _scale_pair(raw_x: float, raw_y: float, xs: list[float], ys: list[float], x: float, y: float, w: float, h: float) -> tuple[float, float]:
@@ -538,103 +665,6 @@ def _hex_to_rgb(value: str) -> tuple[int, int, int]:
 
 def _escape(value: str) -> str:
     return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-
-def _theme_pixels(width: int, height: int, category: str) -> list[tuple[int, int, int]]:
-    colors = {
-        "Basic plot": (47, 111, 115),
-        "Transcriptome": (79, 143, 95),
-        "Genome": (111, 95, 168),
-        "Clinical plot": (211, 111, 69),
-        "Network and Set": (176, 76, 111),
-        "Enrichment": (79, 121, 138),
-        "Epigenome": (177, 122, 32),
-        "Pathway and MAF": (88, 109, 168),
-        "Statistical plot": (74, 133, 108),
-        "Miscellaneous": (88, 121, 138),
-    }
-    accent = colors.get(category, (47, 111, 115))
-    pixels: list[tuple[int, int, int]] = []
-    for row in range(height):
-        for col in range(width):
-            if 40 < col < width - 40 and 70 < row < height - 50 and (col + row) % 17 < 9:
-                pixels.append(accent)
-            else:
-                pixels.append((247, 250, 248))
-    return pixels
-
-
-def _write_png(path: Path, width: int, height: int, pixels: list[tuple[int, int, int]]) -> None:
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-
-    raw = bytearray()
-    for row in range(height):
-        raw.append(0)
-        start = row * width
-        for red, green, blue in pixels[start : start + width]:
-            raw.extend([red, green, blue])
-    png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-    png += chunk(b"IDAT", zlib.compress(bytes(raw), level=6))
-    png += chunk(b"IEND", b"")
-    path.write_bytes(png)
-
-
-def _write_tiff(path: Path, width: int, height: int) -> None:
-    # Minimal uncompressed RGB TIFF. It is intentionally simple and compatible with common image readers.
-    header = b"II*\x00\x08\x00\x00\x00"
-    entries = [
-        (256, 4, 1, width),
-        (257, 4, 1, height),
-        (258, 3, 3, 0),
-        (259, 3, 1, 1),
-        (262, 3, 1, 2),
-        (273, 4, 1, 0),
-        (277, 3, 1, 3),
-        (278, 4, 1, height),
-        (279, 4, 1, width * height * 3),
-    ]
-    ifd_size = 2 + len(entries) * 12 + 4
-    bits_offset = 8 + ifd_size
-    data_offset = bits_offset + 6
-    encoded_entries = bytearray(struct.pack("<H", len(entries)))
-    for tag, kind, count, value in entries:
-        if tag == 258:
-            value = bits_offset
-        if tag == 273:
-            value = data_offset
-        encoded_entries.extend(struct.pack("<HHII", tag, kind, count, value))
-    encoded_entries.extend(struct.pack("<I", 0))
-    bits = struct.pack("<HHH", 8, 8, 8)
-    pixel = bytes([247, 250, 248]) * width * height
-    path.write_bytes(header + bytes(encoded_entries) + bits + pixel)
-
-
-def _write_pdf(path: Path, title: str, module_title: str) -> None:
-    stream = f"BT /F1 20 Tf 72 760 Td ({_pdf_escape(title)}) Tj 0 -34 Td /F1 12 Tf ({_pdf_escape(module_title)} export generated by HGATCplot.) Tj ET"
-    objects = [
-        "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
-        "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
-        "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n",
-        "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
-        f"5 0 obj << /Length {len(stream.encode('latin-1', errors='replace'))} >> stream\n{stream}\nendstream endobj\n",
-    ]
-    body = "%PDF-1.4\n"
-    offsets = [0]
-    for obj in objects:
-        offsets.append(len(body.encode("latin-1")) )
-        body += obj
-    xref_start = len(body.encode("latin-1"))
-    body += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n"
-    for offset in offsets[1:]:
-        body += f"{offset:010d} 00000 n \n"
-    body += f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF\n"
-    path.write_bytes(body.encode("latin-1", errors="replace"))
-
-
-def _pdf_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 def _write_matplotlib_artifacts(slug: str, family: str, parsed: ParsedTable, options: dict, artifacts: dict[str, str], width: int, height: int, title: str) -> bool:

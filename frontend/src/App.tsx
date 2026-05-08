@@ -84,6 +84,12 @@ function ModuleIcon({ module, size = 16 }: { module: PlotModule; size?: number }
   return <Icon size={size} aria-hidden="true" />;
 }
 
+function rendererQualityLabel(module: PlotModule) {
+  if (module.rendererQuality === "plot-specific-r") return "R renderer";
+  if (module.rendererQuality === "plot-specific-hybrid") return "Hybrid renderer";
+  return "Python renderer";
+}
+
 function fieldsForGroup(module: PlotModule, groupFields: string[]) {
   const wanted = new Set(groupFields);
   return module.optionFields.filter((field) => wanted.has(field.key));
@@ -263,7 +269,7 @@ export default function App() {
           </div>
           <div className="status-strip">
             <span><ModuleIcon module={activeModule} size={15} /> {activeModule.visualKind}</span>
-            <span><CheckCircle2 size={15} /> {activeModule.rendererQuality}</span>
+            <span><CheckCircle2 size={15} /> {rendererQualityLabel(activeModule)}</span>
             <span><Database size={15} /> {activeModule.requiredColumns.length} columns</span>
             <span><FlaskConical size={15} /> {activeModule.engine.toUpperCase()}</span>
             <span><ImageDown size={15} /> PNG TIFF SVG PDF</span>

@@ -16,7 +16,7 @@ export type VisualKind =
   | "correlation" | "qq" | "radar" | "area" | "dual-axis" | "dumbbell"
   | "volcano";
 
-export type RendererQuality = "practical" | "family" | "r-only";
+export type RendererQuality = "plot-specific-python" | "plot-specific-r" | "plot-specific-hybrid";
 
 export interface OptionGroup {
   key: string;
@@ -73,4 +73,3 @@ export interface JobResult {
   previewUrl?: string;
   artifacts: Partial<Record<ExportFormat, string>>;
 }
-

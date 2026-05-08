@@ -29,7 +29,7 @@ class ApiContractTests(unittest.TestCase):
             if item["slug"] == "volcano"
         )
         self.assertEqual(volcano_payload["visualKind"], "volcano")
-        self.assertEqual(volcano_payload["rendererQuality"], "practical")
+        self.assertEqual(volcano_payload["rendererQuality"], "plot-specific-python")
         self.assertTrue(volcano_payload["optionGroups"])
 
         precheck = self.client.post(

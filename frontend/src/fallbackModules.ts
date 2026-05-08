@@ -223,12 +223,6 @@ const profiles = {
   }
 } satisfies Record<string, Profile>;
 
-const priorityPracticalSlugs = new Set([
-  "volcano", "heatmap", "bubble", "violin", "pie", "up-down-bar", "line",
-  "scatter", "pca", "principal-components-analysis", "roc", "km-survival",
-  "forest-plot"
-]);
-
 const visualKindByFamily: Partial<Record<keyof typeof profiles, PlotModule["visualKind"]>> = {
   errorbar: "bar",
   "stacked-bar": "bar",
@@ -420,10 +414,8 @@ function visualKind(slug: string, family: keyof typeof profiles): PlotModule["vi
   return visualKindByFamily[family] ?? (family as PlotModule["visualKind"]);
 }
 
-function rendererQuality(slug: string, engine: Engine): PlotModule["rendererQuality"] {
-  if (priorityPracticalSlugs.has(slug)) return "practical";
-  if (engine === "r") return "r-only";
-  return "family";
+function rendererQuality(engine: Engine): PlotModule["rendererQuality"] {
+  return engine === "r" ? "plot-specific-r" : "plot-specific-python";
 }
 
 function optionGroups(fields: PlotModule["optionFields"]): PlotModule["optionGroups"] {
@@ -460,7 +452,7 @@ function moduleFromSpec([slug, title, category, page, family, engine = "python"]
     engine,
     rendererFamily: family,
     visualKind: visualKind(slug, family),
-    rendererQuality: rendererQuality(slug, engine),
+    rendererQuality: rendererQuality(engine),
     optionGroups: optionGroups(fields),
     aliases: aliases(title, slug)
   };

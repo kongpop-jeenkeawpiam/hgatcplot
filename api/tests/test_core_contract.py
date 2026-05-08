@@ -70,21 +70,21 @@ class ModuleRegistryContractTests(unittest.TestCase):
             "correlation", "qq", "radar", "area", "dual-axis", "dumbbell",
             "volcano",
         }
-        valid_quality = {"practical", "family", "r-only"}
+        valid_quality = {"plot-specific-python", "plot-specific-r", "plot-specific-hybrid"}
         self.assertTrue(all(module.visual_kind in valid_visual_kinds for module in modules))
         self.assertTrue(all(module.renderer_quality in valid_quality for module in modules))
         self.assertTrue(all(module.option_groups for module in modules))
-        self.assertEqual(get_module("volcano").renderer_quality, "practical")
-        self.assertEqual(get_module("heatmap").renderer_quality, "practical")
-        self.assertEqual(get_module("bubble").renderer_quality, "practical")
-        self.assertEqual(get_module("violin").renderer_quality, "practical")
-        self.assertEqual(get_module("pie").renderer_quality, "practical")
-        self.assertEqual(get_module("line").renderer_quality, "practical")
-        self.assertEqual(get_module("scatter").renderer_quality, "practical")
-        self.assertEqual(get_module("pca").renderer_quality, "practical")
-        self.assertEqual(get_module("roc").renderer_quality, "practical")
-        self.assertEqual(get_module("km-survival").renderer_quality, "practical")
-        self.assertEqual(get_module("forest-plot").renderer_quality, "practical")
+        self.assertEqual(get_module("volcano").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("heatmap").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("bubble").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("violin").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("pie").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("line").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("scatter").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("pca").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("roc").renderer_quality, "plot-specific-python")
+        self.assertEqual(get_module("km-survival").renderer_quality, "plot-specific-r")
+        self.assertEqual(get_module("forest-plot").renderer_quality, "plot-specific-r")
 
     def test_module_manifest_contains_demo_data_and_required_columns(self):
         module = get_module("volcano")
@@ -106,6 +106,19 @@ class ModuleRegistryContractTests(unittest.TestCase):
 
 
 class RendererContractTests(unittest.TestCase):
+    def test_every_module_has_explicit_renderer_spec(self):
+        import app.renderers as renderers
+
+        specs = renderers.RENDERER_SPECS
+        self.assertEqual(set(specs), {module.slug for module in list_modules()})
+        for module in list_modules():
+            with self.subTest(module=module.slug):
+                spec = specs[module.slug]
+                self.assertEqual(spec.family, module.renderer_family)
+                self.assertIn(spec.backend, {"python", "r"})
+                self.assertIsNot(spec.svg_renderer, renderers._render_generic)
+                self.assertIsNot(spec.svg_renderer, renderers._render_family_placeholder)
+
     def test_non_bar_visual_kinds_do_not_route_to_generic_bar_renderer(self):
         import app.renderers as renderers
 

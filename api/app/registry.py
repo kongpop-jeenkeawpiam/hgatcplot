@@ -66,12 +66,6 @@ COLOR_OPTIONS = [
     OptionField("accentColor", "Accent color", "color", "#d36f45"),
 ]
 
-PRIORITY_PRACTICAL_SLUGS = {
-    "volcano", "heatmap", "bubble", "violin", "pie", "up-down-bar", "line",
-    "scatter", "pca", "principal-components-analysis", "roc", "km-survival",
-    "forest-plot",
-}
-
 VISUAL_KIND_BY_FAMILY = {
     "errorbar": "bar",
     "stacked-bar": "bar",
@@ -125,11 +119,9 @@ def _visual_kind(slug: str, family: str) -> str:
 
 
 def _renderer_quality(slug: str, engine: str) -> str:
-    if slug in PRIORITY_PRACTICAL_SLUGS:
-        return "practical"
     if engine == "r":
-        return "r-only"
-    return "family"
+        return "plot-specific-r"
+    return "plot-specific-python"
 
 
 def _option_groups(fields: list[OptionField]) -> list[OptionGroup]:
