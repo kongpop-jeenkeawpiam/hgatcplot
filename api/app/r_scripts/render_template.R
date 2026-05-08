@@ -114,6 +114,91 @@ plot_network <- function(frame, title_text) {
   text(xs, ys, labels = substr(nodes, 1, 10), cex = 0.72, col = "#172623")
 }
 
+plot_set <- function(frame, title_text) {
+  values <- abs(first_numeric(frame))
+  labels <- substr(label_column(frame), 1, 12)
+  symbols(seq_along(values), rep(1, length(values)), circles = sqrt(values / max(values, 1)) * 0.38,
+          inches = FALSE, fg = palette[seq_along(values) %% length(palette) + 1],
+          bg = adjustcolor(palette[seq_along(values) %% length(palette) + 1], 0.35),
+          xlab = "", ylab = "", axes = FALSE, main = title_text)
+  text(seq_along(values), rep(1, length(values)), labels = labels, cex = 0.8, col = "#172623")
+}
+
+plot_hierarchy <- function(frame, title_text) {
+  values <- pmax(first_numeric(frame), 0)
+  labels <- substr(label_column(frame), 1, 14)
+  total <- sum(values)
+  if (total <= 0) total <- 1
+  plot.new()
+  title(title_text)
+  cursor <- 0
+  for (i in seq_along(values)) {
+    width <- values[[i]] / total
+    rect(cursor, 0.12, cursor + width, 0.88, col = adjustcolor(palette[[((i - 1) %% length(palette)) + 1]], 0.75), border = "white")
+    if (width > 0.08) text(cursor + width / 2, 0.52, labels[[i]], col = "white", cex = 0.82)
+    cursor <- cursor + width
+  }
+}
+
+plot_pathway <- function(frame, title_text) {
+  if (!all(c("pathway", "gene") %in% names(frame))) {
+    plot_bar_like(frame, "bar", title_text)
+    return()
+  }
+  pathways <- sort(unique(as.character(frame$pathway)))
+  genes <- sort(unique(as.character(frame$gene)))
+  px <- rep(0.24, length(pathways)); names(px) <- pathways
+  py <- seq(0.85, 0.15, length.out = length(pathways)); names(py) <- pathways
+  gx <- rep(0.76, length(genes)); names(gx) <- genes
+  gy <- seq(0.85, 0.15, length.out = length(genes)); names(gy) <- genes
+  plot.new()
+  title(title_text)
+  for (i in seq_len(nrow(frame))) {
+    segments(px[as.character(frame$pathway[i])], py[as.character(frame$pathway[i])], gx[as.character(frame$gene[i])], gy[as.character(frame$gene[i])], col = "#9aa8a3")
+  }
+  points(px, py, pch = 22, bg = palette[seq_along(pathways) %% length(palette) + 1], col = "white", cex = 3.2)
+  text(px, py, labels = substr(pathways, 1, 11), cex = 0.65, col = "white")
+  points(gx, gy, pch = 21, bg = palette[(seq_along(genes) + 3) %% length(palette) + 1], col = "white", cex = 2.1)
+  text(gx + 0.04, gy, labels = substr(genes, 1, 12), cex = 0.72, pos = 4)
+}
+
+plot_maf <- function(frame, title_text) {
+  if (!all(c("gene", "sample", "mutation") %in% names(frame))) {
+    plot_bar_like(frame, "bar", title_text)
+    return()
+  }
+  genes <- sort(unique(as.character(frame$gene)))
+  samples <- sort(unique(as.character(frame$sample)))
+  plot(NA, xlim = c(0.5, length(samples) + 0.5), ylim = c(0.5, length(genes) + 0.5),
+       xaxt = "n", yaxt = "n", xlab = "sample", ylab = "gene", main = title_text)
+  axis(1, at = seq_along(samples), labels = samples, las = 2)
+  axis(2, at = seq_along(genes), labels = genes, las = 2)
+  for (i in seq_len(nrow(frame))) {
+    x <- match(as.character(frame$sample[i]), samples)
+    y <- match(as.character(frame$gene[i]), genes)
+    rect(x - 0.45, y - 0.45, x + 0.45, y + 0.45, col = palette[((y - 1) %% length(palette)) + 1], border = "white")
+  }
+  grid(col = "#d9e1dd")
+}
+
+plot_wordcloud <- function(frame, title_text) {
+  values <- first_numeric(frame)
+  labels <- substr(label_column(frame), 1, 18)
+  low <- min(values)
+  high <- max(values)
+  if (low == high) high <- low + 1
+  plot.new()
+  title(title_text)
+  angles <- seq(0, 8 * pi, length.out = length(labels))
+  radii <- seq(0, 0.38, length.out = length(labels))
+  xs <- 0.5 + radii * cos(angles)
+  ys <- 0.5 + radii * sin(angles)
+  for (i in seq_along(labels)) {
+    text(xs[[i]], ys[[i]], labels[[i]], cex = 0.8 + 1.6 * (values[[i]] - low) / (high - low),
+         col = palette[((i - 1) %% length(palette)) + 1], srt = ifelse(i %% 7 == 4, 90, 0), font = 2)
+  }
+}
+
 plot_forest <- function(frame, title_text) {
   effects <- if ("effect" %in% names(frame)) frame[["effect"]] else first_numeric(frame)
   lows <- if ("low" %in% names(frame)) frame[["low"]] else effects * 0.85
@@ -156,7 +241,7 @@ plot_template <- function(frame, family_name, title_text) {
   par(bg = "#f7faf8", fg = "#172623", col.axis = "#314541", col.lab = "#314541", mar = c(5, 5, 4, 2))
 
   if (family_name %in% c("pie", "set", "polar")) {
-    plot_pie_or_set(frame, title_text)
+    if (family_name == "set") plot_set(frame, title_text) else plot_pie_or_set(frame, title_text)
   } else if (family_name %in% c("line", "area", "dual-axis", "radar", "dumbbell")) {
     plot_line_or_area(frame, family_name, title_text)
   } else if (family_name %in% c("scatter", "correlation", "qq", "pca", "roc", "survival")) {
@@ -171,7 +256,15 @@ plot_template <- function(frame, family_name, title_text) {
     plot_forest(frame, title_text)
   } else if (family_name %in% c("genome", "epigenome", "sequence")) {
     plot_genome_or_sequence(frame, family_name, title_text)
-  } else if (family_name %in% c("enrichment", "pathway", "maf", "funnel", "hierarchy", "wordcloud", "calendar", "stacked-bar", "errorbar", "bar")) {
+  } else if (family_name == "pathway") {
+    plot_pathway(frame, title_text)
+  } else if (family_name == "maf") {
+    plot_maf(frame, title_text)
+  } else if (family_name == "hierarchy") {
+    plot_hierarchy(frame, title_text)
+  } else if (family_name == "wordcloud") {
+    plot_wordcloud(frame, title_text)
+  } else if (family_name %in% c("enrichment", "funnel", "calendar", "stacked-bar", "errorbar", "bar")) {
     plot_bar_like(frame, family_name, title_text)
   } else {
     stop(paste("No plot-specific R renderer registered for family:", family_name))

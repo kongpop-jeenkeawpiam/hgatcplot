@@ -43,6 +43,10 @@ test("fallback catalog mirrors the expanded SRplot module contract", () => {
   assert.match(fallback, /optionGroups/);
   assert.match(fallback, /plot-specific-python/);
   assert.match(fallback, /plot-specific-r/);
+  assert.match(fallback, /srplotReferenceUrl/);
+  assert.match(fallback, /srplotParityStatus/);
+  assert.match(fallback, /styleProfile/);
+  assert.match(fallback, /plot_basic_wordcloud_118_en/);
 });
 
 test("stylesheet keeps the interface dense and responsive", () => {

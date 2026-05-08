@@ -90,6 +90,13 @@ function rendererQualityLabel(module: PlotModule) {
   return "Python renderer";
 }
 
+function srplotParityLabel(module: PlotModule) {
+  if (module.srplotParityStatus === "exact-match") return "SRplot exact";
+  if (module.srplotParityStatus === "pixel-close") return "SRplot pixel-close";
+  if (module.srplotParityStatus === "reference-known") return "SRplot reference";
+  return "SRplot reference needed";
+}
+
 function fieldsForGroup(module: PlotModule, groupFields: string[]) {
   const wanted = new Set(groupFields);
   return module.optionFields.filter((field) => wanted.has(field.key));
@@ -205,7 +212,7 @@ export default function App() {
         .map(([category, items]) => [
           category,
           items.filter((module) =>
-            [module.title, module.category, module.description, module.slug, module.engine, module.rendererFamily, module.sourceUrl, ...module.aliases].some((value) => value.toLowerCase().includes(lower))
+            [module.title, module.category, module.description, module.slug, module.engine, module.rendererFamily, module.sourceUrl, module.srplotReferenceUrl, module.styleProfile, ...module.aliases].some((value) => value.toLowerCase().includes(lower))
           )
         ])
         .filter(([, items]) => items.length > 0)
@@ -270,6 +277,7 @@ export default function App() {
           <div className="status-strip">
             <span><ModuleIcon module={activeModule} size={15} /> {activeModule.visualKind}</span>
             <span><CheckCircle2 size={15} /> {rendererQualityLabel(activeModule)}</span>
+            <span><BookOpen size={15} /> {srplotParityLabel(activeModule)}</span>
             <span><Database size={15} /> {activeModule.requiredColumns.length} columns</span>
             <span><FlaskConical size={15} /> {activeModule.engine.toUpperCase()}</span>
             <span><ImageDown size={15} /> PNG TIFF SVG PDF</span>
@@ -458,6 +466,9 @@ export default function App() {
             <p>{activeModule.citation}</p>
             <a className="source-link" href={activeModule.sourceUrl} target="_blank" rel="noreferrer">
               SRplot source
+            </a>
+            <a className="source-link" href={activeModule.srplotReferenceUrl} target="_blank" rel="noreferrer">
+              SRplot exact-match reference
             </a>
           </section>
         </div>

@@ -183,7 +183,9 @@ const profiles = {
   wordcloud: {
     requiredColumns: ["word", "weight"],
     description: "Weighted term cloud.",
-    demoData: "word\tweight\nimmune\t30\ncell\t24\nsignal\t18\npathway\t14\nexpression\t12\n"
+    demoData:
+      "word\tweight\nhealth\t120\nCOVID\t104\ninformation\t92\nmedical\t84\ncoronavirus\t55\noverview\t52\ntheme\t49\ncommunity\t30\ndemonstrate\t27\nDirichlet\t25\ntechnique\t24\nspecialists\t23\npublic\t22\ncombating\t22\nefforts\t21\nthreats\t21\noutbreak\t20\nliterature\t20\nglobal\t19\nscientists\t19\ncrisis\t18\nroles\t18\nresearch\t18\nunprecedented\t18\nscience\t17\narticle\t17\nkey\t17\ntext\t16\nsupport\t16\nmining\t16\ncentury\t15\nimmunity\t15\ninterrelationships\t14\nvisualisation\t14\nrepresentative\t14\nallocation\t14\nlatent\t14\nplay\t13\nprocedure\t13\nnetwork\t13\nexplore\t13\napplying\t13\ndiseases\t13\nMERS\t12\nSARS\t12\ngeneric\t12\npresents\t12\ncommunities\t12\nsimilarity\t11\ndisplays\t11\nreveals\t11\nrelated\t10\nmass\t10\nmain\t10\nstudies\t10\nperform\t10\ndifference\t10\n",
+    defaults: { width: 684, height: 683, title: "", maxWords: 60 }
   },
   maf: {
     requiredColumns: ["gene", "sample", "mutation"],
@@ -405,6 +407,28 @@ function sourceUrl(page: number, slug: string) {
   return `https://bioinformatics.com.cn/en?p=${page}#${slug}`;
 }
 
+const srplotReferenceOverrides: Record<string, string> = {
+  volcano: "https://bioinformatics.com.cn/plot_basic_3_color_volcano_plot_086_en",
+  wordcloud: "https://www.bioinformatics.com.cn/plot_basic_wordcloud_118_en"
+};
+
+const styleProfileOverrides: Record<string, string> = {
+  volcano: "srplot-volcano-three-color",
+  wordcloud: "srplot-wordcloud"
+};
+
+function srplotReferenceUrl(page: number, slug: string) {
+  return srplotReferenceOverrides[slug] ?? sourceUrl(page, slug);
+}
+
+function srplotParityStatus(slug: string): PlotModule["srplotParityStatus"] {
+  return srplotReferenceOverrides[slug] ? "reference-known" : "reference-needed";
+}
+
+function styleProfile(slug: string, family: keyof typeof profiles) {
+  return styleProfileOverrides[slug] ?? `srplot-${family}`;
+}
+
 function aliases(title: string, slug: string) {
   return Array.from(new Set([slug, title.toLowerCase(), title.toLowerCase().replace(/[/-]/g, " ")]));
 }
@@ -449,6 +473,9 @@ function moduleFromSpec([slug, title, category, page, family, engine = "python"]
     citation,
     exportFormats: ["png", "tiff", "svg", "pdf"],
     sourceUrl: sourceUrl(page, slug),
+    srplotReferenceUrl: srplotReferenceUrl(page, slug),
+    srplotParityStatus: srplotParityStatus(slug),
+    styleProfile: styleProfile(slug, family),
     engine,
     rendererFamily: family,
     visualKind: visualKind(slug, family),

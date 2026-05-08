@@ -17,6 +17,7 @@ export type VisualKind =
   | "volcano";
 
 export type RendererQuality = "plot-specific-python" | "plot-specific-r" | "plot-specific-hybrid";
+export type SRplotParityStatus = "reference-known" | "reference-needed" | "pixel-close" | "exact-match";
 
 export interface OptionGroup {
   key: string;
@@ -36,6 +37,9 @@ export interface PlotModule {
   citation: string;
   exportFormats: ExportFormat[];
   sourceUrl: string;
+  srplotReferenceUrl: string;
+  srplotParityStatus: SRplotParityStatus;
+  styleProfile: string;
   engine: "python" | "r";
   rendererFamily: string;
   visualKind: VisualKind;

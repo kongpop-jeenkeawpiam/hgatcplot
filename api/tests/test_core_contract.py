@@ -94,6 +94,35 @@ class ModuleRegistryContractTests(unittest.TestCase):
         self.assertIn("log2FC", module.demo_data)
         self.assertIn("volcano", module.aliases)
 
+    def test_wordcloud_defaults_track_srplot_reference_image(self):
+        module = get_module("wordcloud")
+
+        self.assertEqual(module.default_options["width"], 684)
+        self.assertEqual(module.default_options["height"], 683)
+        self.assertEqual(module.default_options["title"], "")
+        self.assertIn("health\t120", module.demo_data)
+        self.assertIn("COVID\t104", module.demo_data)
+        self.assertIn("information\t92", module.demo_data)
+        self.assertIn("medical\t84", module.demo_data)
+
+    def test_srplot_exact_match_metadata_is_exposed_for_tracking(self):
+        modules = list_modules()
+        valid_statuses = {"reference-known", "reference-needed", "pixel-close", "exact-match"}
+
+        self.assertTrue(all(module.srplot_reference_url.startswith("https://") for module in modules))
+        self.assertTrue(all(module.srplot_parity_status in valid_statuses for module in modules))
+        self.assertTrue(all(module.style_profile for module in modules))
+
+        volcano = get_module("volcano")
+        self.assertEqual(volcano.srplot_parity_status, "reference-known")
+        self.assertIn("plot_basic_3_color_volcano_plot_086_en", volcano.srplot_reference_url)
+        self.assertEqual(volcano.style_profile, "srplot-volcano-three-color")
+
+        wordcloud = get_module("wordcloud")
+        self.assertEqual(wordcloud.srplot_parity_status, "reference-known")
+        self.assertIn("plot_basic_wordcloud_118_en", wordcloud.srplot_reference_url)
+        self.assertEqual(wordcloud.style_profile, "srplot-wordcloud")
+
     def test_every_module_has_demo_data_options_and_exports(self):
         for module in list_modules():
             with self.subTest(module=module.slug):
@@ -106,6 +135,50 @@ class ModuleRegistryContractTests(unittest.TestCase):
 
 
 class RendererContractTests(unittest.TestCase):
+    def test_wordcloud_matplotlib_export_uses_text_layout_not_bars(self):
+        import app.renderers as renderers
+
+        class FakeAxes:
+            def __init__(self):
+                self.calls = []
+
+            def text(self, *args, **kwargs):
+                self.calls.append(("text", args, kwargs))
+
+            def bar(self, *args, **kwargs):
+                self.calls.append(("bar", args, kwargs))
+
+            def barh(self, *args, **kwargs):
+                self.calls.append(("barh", args, kwargs))
+
+            def set_xlim(self, *args, **kwargs):
+                self.calls.append(("set_xlim", args, kwargs))
+
+            def set_ylim(self, *args, **kwargs):
+                self.calls.append(("set_ylim", args, kwargs))
+
+            def axis(self, *args, **kwargs):
+                self.calls.append(("axis", args, kwargs))
+
+            def tick_params(self, *args, **kwargs):
+                self.calls.append(("tick_params", args, kwargs))
+
+            def set_ylabel(self, *args, **kwargs):
+                self.calls.append(("set_ylabel", args, kwargs))
+
+        class FakeFig:
+            pass
+
+        parsed = parse_tabular_text(get_module("wordcloud").demo_data)
+        axes = FakeAxes()
+
+        renderers._matplotlib_family_plot(axes, FakeFig(), parsed, "wordcloud", {"maxWords": 60}, None)
+
+        call_names = [name for name, _, _ in axes.calls]
+        self.assertGreaterEqual(call_names.count("text"), parsed.row_count)
+        self.assertNotIn("bar", call_names)
+        self.assertNotIn("barh", call_names)
+
     def test_every_module_has_explicit_renderer_spec(self):
         import app.renderers as renderers
 

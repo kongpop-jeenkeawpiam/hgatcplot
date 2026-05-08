@@ -11,6 +11,7 @@ from app.r_engine import run_r_renderer
 
 
 PALETTE = ["#2f6f73", "#d36f45", "#6f5fa8", "#d1a53c", "#4f8f5f", "#b04c6f", "#58798a", "#8a6d3b"]
+WORDCLOUD_PALETTE = ["#46136f", "#39408a", "#2bad82", "#2a7093", "#83d93f", "#e2e300", "#0f8c86"]
 
 
 @dataclass(frozen=True)
@@ -339,35 +340,54 @@ def _render_bar_family(svg: SVGCanvas, parsed: ParsedTable, options: dict, title
 
 
 def _render_set_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
-    _render_pie(svg, parsed, options, title)
+    x, y, w, h = svg.plot_area()
+    labels = [row.get(parsed.headers[0], f"Set {index + 1}") for index, row in enumerate(parsed.rows[:4])]
+    values = [max(_first_numeric(row, parsed.headers, index + 1), 0.0) for index, row in enumerate(parsed.rows[:4])]
+    max_value = max(values or [1.0])
+    centers = [
+        (x + w * 0.42, y + h * 0.42),
+        (x + w * 0.58, y + h * 0.42),
+        (x + w * 0.50, y + h * 0.58),
+        (x + w * 0.50, y + h * 0.31),
+    ]
+    for index, (label, value) in enumerate(zip(labels, values)):
+        radius = min(w, h) * (0.18 + 0.08 * _normalize(value, 0, max_value))
+        cx, cy = centers[index % len(centers)]
+        svg.circle(cx, cy, radius, PALETTE[index % len(PALETTE)], opacity=0.34)
+        svg.text(cx, cy + 4, label[:12], 12, "#172623", anchor="middle", weight="700")
 
 
 def _render_hierarchy_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
     x, y, w, h = svg.plot_area()
     labels = [row.get("child", row.get(parsed.headers[0], f"Node {index + 1}")) for index, row in enumerate(parsed.rows)]
     values = [max(_first_numeric(row, parsed.headers, index + 1), 0.0) for index, row in enumerate(parsed.rows)]
-    total = sum(values) or 1.0
-    cursor = x
-    for index, value in enumerate(values):
-        cell_w = w * value / total
-        svg.rect(cursor, y, cell_w - 2, h, PALETTE[index % len(PALETTE)], opacity=0.72, radius=4)
-        if cell_w > 44:
-            svg.text(cursor + 8, y + 28, labels[index][:16], 11, "#ffffff", weight="700")
-        cursor += cell_w
+    for index, (rx, ry, rw, rh) in enumerate(_treemap_rectangles(values, x, y, w, h)):
+        svg.rect(rx, ry, rw - 2, rh - 2, PALETTE[index % len(PALETTE)], opacity=0.72, radius=4)
+        if rw > 44 and rh > 24:
+            svg.text(rx + 8, ry + 24, labels[index][:16], 11, "#ffffff", weight="700")
 
 
 def _render_funnel_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
-    x, y, w, h = svg.axes("stage", "value")
+    x, y, w, h = svg.plot_area()
     labels = [row.get("stage", row.get(parsed.headers[0], f"Stage {index + 1}")) for index, row in enumerate(parsed.rows)]
     values = [max(_first_numeric(row, parsed.headers, index + 1), 0.0) for index, row in enumerate(parsed.rows)]
     max_value = max(values or [1.0])
-    row_h = h / max(len(values), 1) * 0.64
+    step_h = h / max(len(values), 1)
     for index, value in enumerate(values):
-        bar_w = w * value / max_value
-        px = x + (w - bar_w) / 2
-        py = y + index * h / max(len(values), 1) + 8
-        svg.rect(px, py, bar_w, row_h, PALETTE[index % len(PALETTE)], opacity=0.82, radius=4)
-        svg.text(x + w / 2, py + row_h * 0.62, labels[index][:18], 11, "#ffffff", anchor="middle", weight="700")
+        next_value = values[index + 1] if index + 1 < len(values) else value * 0.78
+        top_w = w * value / max_value
+        bottom_w = w * next_value / max_value
+        top_y = y + index * step_h + 4
+        bottom_y = top_y + step_h * 0.78
+        points = [
+            (x + (w - top_w) / 2, top_y),
+            (x + (w + top_w) / 2, top_y),
+            (x + (w + bottom_w) / 2, bottom_y),
+            (x + (w - bottom_w) / 2, bottom_y),
+        ]
+        path = "M " + " L ".join(f"{px:.2f} {py:.2f}" for px, py in points) + " Z"
+        svg.path(path, PALETTE[index % len(PALETTE)], opacity=0.82)
+        svg.text(x + w / 2, top_y + step_h * 0.45, labels[index][:18], 11, "#ffffff", anchor="middle", weight="700")
 
 
 def _render_calendar_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
@@ -386,11 +406,42 @@ def _render_calendar_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, ti
 
 
 def _render_polar_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
-    _render_pie(svg, parsed, options, title)
+    x, y, w, h = svg.plot_area()
+    values = [max(_first_numeric(row, parsed.headers, index + 1), 0.0) for index, row in enumerate(parsed.rows)]
+    labels = [row.get(parsed.headers[0], f"Item {index + 1}") for index, row in enumerate(parsed.rows)]
+    cx, cy = x + w / 2, y + h / 2
+    max_radius = min(w, h) * 0.42
+    max_value = max(values or [1.0])
+    for index, value in enumerate(values):
+        start = math.tau * index / max(len(values), 1) - math.pi / 2
+        end = math.tau * (index + 0.82) / max(len(values), 1) - math.pi / 2
+        radius = max_radius * value / max_value
+        path = _arc_sector_path(cx, cy, radius, start, end)
+        svg.path(path, PALETTE[index % len(PALETTE)], opacity=0.76)
+        lx = cx + (max_radius + 18) * math.cos((start + end) / 2)
+        ly = cy + (max_radius + 18) * math.sin((start + end) / 2)
+        svg.text(lx, ly, labels[index][:8], 10, anchor="middle")
 
 
 def _render_pathway_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
-    _render_bar_family(svg, parsed, options, title)
+    x, y, w, h = svg.plot_area()
+    pathways = sorted({row.get("pathway", row.get(parsed.headers[0], "")) for row in parsed.rows})
+    genes = sorted({row.get("gene", row.get(parsed.headers[min(1, len(parsed.headers) - 1)], "")) for row in parsed.rows})
+    pathway_positions = {name: (x + w * 0.25, y + (index + 0.5) * h / max(len(pathways), 1)) for index, name in enumerate(pathways)}
+    gene_positions = {name: (x + w * 0.75, y + (index + 0.5) * h / max(len(genes), 1)) for index, name in enumerate(genes)}
+    for row in parsed.rows:
+        pathway = row.get("pathway", row.get(parsed.headers[0], ""))
+        gene = row.get("gene", row.get(parsed.headers[min(1, len(parsed.headers) - 1)], ""))
+        if pathway in pathway_positions and gene in gene_positions:
+            svg.line(*pathway_positions[pathway], *gene_positions[gene], "#9aa8a3", 1.2)
+    for index, pathway in enumerate(pathways):
+        px, py = pathway_positions[pathway]
+        svg.rect(px - 58, py - 15, 116, 30, PALETTE[index % len(PALETTE)], radius=6, opacity=0.82)
+        svg.text(px, py + 4, pathway[:15], 10, "#ffffff", anchor="middle", weight="700")
+    for index, gene in enumerate(genes):
+        gx, gy = gene_positions[gene]
+        svg.circle(gx, gy, 14, PALETTE[(index + 3) % len(PALETTE)])
+        svg.text(gx + 22, gy + 4, gene[:12], 10)
 
 
 def _render_sequence_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
@@ -421,14 +472,18 @@ def _render_maf_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: 
 
 
 def _render_wordcloud_plot(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
-    x, y, w, h = svg.plot_area()
-    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
-    low, high = min(values or [0]), max(values or [1])
-    for index, row in enumerate(parsed.rows[:24]):
-        size = int(12 + _normalize(values[index], low, high) * 22)
-        px = x + (index % 4) * w / 4 + 18
-        py = y + (index // 4) * 42 + 30
-        svg.text(px, min(py, y + h - 10), row.get(parsed.headers[0], "")[:14], size, PALETTE[index % len(PALETTE)], weight="700")
+    svg.rect(0, 0, svg.width, svg.height, "#ffffff")
+    entries = _wordcloud_entries(parsed, options)
+    for index, (label, value, low, high) in enumerate(entries):
+        nx, ny, rotate, scale = _wordcloud_slot(index)
+        size = _wordcloud_font_size(value, low, high, scale, 14, 148)
+        px = nx * svg.width
+        py = ny * svg.height
+        transform = f' transform="rotate({rotate} {px:.2f} {py:.2f})"' if rotate else ""
+        svg.parts.append(
+            f'<text x="{px:.2f}" y="{py:.2f}" fill="{WORDCLOUD_PALETTE[index % len(WORDCLOUD_PALETTE)]}" font-size="{size}" font-weight="700" '
+            f'font-family="{_escape(svg.font_family)}" text-anchor="middle"{transform}>{_escape(label)}</text>'
+        )
 
 
 def _render_family_placeholder(svg: SVGCanvas, parsed: ParsedTable, options: dict, title: str) -> None:
@@ -637,6 +692,135 @@ def _scale_pair(raw_x: float, raw_y: float, xs: list[float], ys: list[float], x:
     return x + nx * w, y + h - ny * h
 
 
+def _treemap_rectangles(values: list[float], x: float, y: float, w: float, h: float) -> list[tuple[float, float, float, float]]:
+    weighted = [(index, max(value, 0.0)) for index, value in enumerate(values)]
+    total = sum(value for _, value in weighted) or 1.0
+    rectangles: list[tuple[int, float, float, float, float]] = []
+
+    def split(items: list[tuple[int, float]], rx: float, ry: float, rw: float, rh: float) -> None:
+        if not items:
+            return
+        if len(items) == 1:
+            rectangles.append((items[0][0], rx, ry, rw, rh))
+            return
+        items = sorted(items, key=lambda item: item[1], reverse=True)
+        subtotal = sum(value for _, value in items)
+        half = subtotal / 2
+        cursor = 0.0
+        split_at = 1
+        for split_at, (_, value) in enumerate(items, start=1):
+            cursor += value
+            if cursor >= half:
+                break
+        first, second = items[:split_at], items[split_at:]
+        first_total = sum(value for _, value in first)
+        if rw >= rh:
+            first_w = rw * first_total / subtotal
+            split(first, rx, ry, first_w, rh)
+            split(second, rx + first_w, ry, rw - first_w, rh)
+        else:
+            first_h = rh * first_total / subtotal
+            split(first, rx, ry, rw, first_h)
+            split(second, rx, ry + first_h, rw, rh - first_h)
+
+    split([(index, value / total) for index, value in weighted], x, y, w, h)
+    by_index = sorted(rectangles, key=lambda item: item[0])
+    return [(rx, ry, rw, rh) for _, rx, ry, rw, rh in by_index]
+
+
+def _arc_sector_path(cx: float, cy: float, radius: float, start: float, end: float) -> str:
+    x1, y1 = cx + radius * math.cos(start), cy + radius * math.sin(start)
+    x2, y2 = cx + radius * math.cos(end), cy + radius * math.sin(end)
+    large = 1 if abs(end - start) > math.pi else 0
+    return f"M {cx:.2f} {cy:.2f} L {x1:.2f} {y1:.2f} A {radius:.2f} {radius:.2f} 0 {large} 1 {x2:.2f} {y2:.2f} Z"
+
+
+def _wordcloud_entries(parsed: ParsedTable, options: dict) -> list[tuple[str, float, float, float]]:
+    max_words = _int_option(options, "maxWords", 60, 1, 200)
+    rows = parsed.rows[:]
+    values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(rows)]
+    word_header = parsed.headers[0] if parsed.headers else "word"
+    ranked = sorted(
+        ((str(row.get(word_header, "")).strip(), values[index]) for index, row in enumerate(rows)),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    ranked = [(label[:24], value) for label, value in ranked if label][:max_words]
+    low, high = min((value for _, value in ranked), default=0.0), max((value for _, value in ranked), default=1.0)
+    return [(label, value, low, high) for label, value in ranked]
+
+
+def _wordcloud_slot(index: int) -> tuple[float, float, int, float]:
+    srplot_slots = [
+        (0.49, 0.31, 0, 1.00),
+        (0.43, 0.53, 0, 0.50),
+        (0.53, 0.76, 0, 0.40),
+        (0.57, 0.91, 0, 0.35),
+        (0.31, 0.14, 0, 0.42),
+        (0.33, 0.07, 0, 0.40),
+        (0.73, 0.08, 0, 0.38),
+        (0.06, 0.22, 90, 0.24),
+        (0.96, 0.19, 90, 0.20),
+        (0.95, 0.53, 90, 0.18),
+        (0.10, 0.39, 0, 0.20),
+        (0.20, 0.84, 0, 0.22),
+        (0.74, 0.66, 0, 0.18),
+        (0.86, 0.43, 0, 0.17),
+        (0.16, 0.66, 0, 0.17),
+        (0.09, 0.91, 0, 0.17),
+        (0.81, 0.76, 0, 0.16),
+        (0.91, 0.89, 0, 0.16),
+        (0.53, 0.66, 0, 0.16),
+        (0.65, 0.16, 90, 0.15),
+        (0.23, 0.52, 0, 0.15),
+        (0.58, 0.39, 0, 0.15),
+        (0.83, 0.14, 0, 0.15),
+        (0.68, 0.81, 0, 0.15),
+        (0.12, 0.07, 90, 0.15),
+        (0.72, 0.27, 90, 0.13),
+        (0.66, 0.61, 0, 0.13),
+        (0.05, 0.61, 0, 0.13),
+        (0.93, 0.67, 0, 0.13),
+        (0.36, 0.96, 0, 0.13),
+        (0.76, 0.96, 0, 0.13),
+        (0.31, 0.39, 0, 0.12),
+        (0.20, 0.22, 90, 0.11),
+        (0.77, 0.40, 90, 0.11),
+        (0.05, 0.97, 0, 0.11),
+        (0.94, 0.75, 0, 0.11),
+        (0.39, 0.25, 90, 0.10),
+        (0.88, 0.31, 90, 0.10),
+        (0.14, 0.75, 0, 0.10),
+        (0.55, 0.45, 0, 0.10),
+        (0.08, 0.02, 0, 0.09),
+        (0.91, 0.05, 0, 0.09),
+        (0.54, 0.03, 0, 0.09),
+        (0.27, 0.31, 90, 0.09),
+        (0.65, 0.47, 90, 0.09),
+        (0.18, 0.58, 0, 0.09),
+        (0.88, 0.58, 0, 0.09),
+        (0.32, 0.68, 0, 0.09),
+        (0.61, 0.70, 0, 0.09),
+        (0.86, 0.82, 0, 0.09),
+        (0.14, 0.97, 0, 0.09),
+    ]
+    if index < len(srplot_slots):
+        return srplot_slots[index]
+    angle = index * 2.399963229728653
+    radius = min(0.46, 0.11 + 0.035 * math.sqrt(index))
+    nx = min(max(0.5 + radius * math.cos(angle), 0.04), 0.96)
+    ny = min(max(0.5 + radius * math.sin(angle), 0.04), 0.96)
+    rotate = 90 if index % 8 in {3, 6} else 0
+    return nx, ny, rotate, 0.08
+
+
+def _wordcloud_font_size(value: float, low: float, high: float, slot_scale: float, minimum: int, maximum: int) -> int:
+    normalized = math.sqrt(_normalize(value, low, high))
+    rank_boost = min(max(slot_scale, 0.06), 1.0)
+    size = minimum + normalized * (maximum - minimum)
+    return int(max(minimum, min(maximum, size * (0.55 + rank_boost * 0.62))))
+
+
 def _normalize(value: float, low: float, high: float) -> float:
     if math.isclose(low, high):
         return 0.5
@@ -677,10 +861,15 @@ def _write_matplotlib_artifacts(slug: str, family: str, parsed: ParsedTable, opt
     except Exception:
         return False
 
-    fig_width = max(width / 140, 4.8)
-    fig_height = max(height / 140, 3.6)
+    if family == "wordcloud":
+        fig_width = max(width / 180, 3.2)
+        fig_height = max(height / 180, 3.2)
+    else:
+        fig_width = max(width / 140, 4.8)
+        fig_height = max(height / 140, 3.6)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    fig.patch.set_facecolor("#f7faf8")
+    figure_background = "#ffffff" if family == "wordcloud" else "#f7faf8"
+    fig.patch.set_facecolor(figure_background)
     ax.set_facecolor("#ffffff")
     try:
         if slug == "pie":
@@ -762,13 +951,17 @@ def _write_matplotlib_artifacts(slug: str, family: str, parsed: ParsedTable, opt
         else:
             _matplotlib_family_plot(ax, fig, parsed, family, options, LinearSegmentedColormap)
 
-        ax.set_title(title, fontsize=14, fontweight="bold", color="#172623")
-        if family not in {"pie", "set"}:
+        if family != "wordcloud":
+            ax.set_title(title, fontsize=14, fontweight="bold", color="#172623")
+        if family not in {"pie", "set", "wordcloud"}:
             ax.grid(True, color="#dde6e2", linewidth=0.7, alpha=0.7)
         ax.tick_params(axis="both", labelsize=8, colors="#314541")
         for spine in ax.spines.values():
-            spine.set_color("#d6e0dc")
-        fig.tight_layout()
+            spine.set_color("#ffffff" if family == "wordcloud" else "#d6e0dc")
+        if family == "wordcloud":
+            fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        else:
+            fig.tight_layout()
         fig.savefig(artifacts["svg"], format="svg")
         fig.savefig(artifacts["png"], format="png", dpi=180)
         fig.savefig(artifacts["tiff"], format="tiff", dpi=180)
@@ -787,12 +980,159 @@ def _matplotlib_family_plot(ax, fig, parsed: ParsedTable, family: str, options: 
     labels = [row.get(parsed.headers[0], f"Row {index + 1}") for index, row in enumerate(parsed.rows)]
     values = [_first_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
 
-    if family in {"pie", "set", "polar"}:
+    if family == "set":
+        try:
+            from matplotlib.patches import Circle
+        except Exception:
+            Circle = None
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        centers = [(0.42, 0.55), (0.58, 0.55), (0.50, 0.38), (0.50, 0.70)]
+        max_value = max([abs(value) for value in values] + [1.0])
+        for index, (label, value) in enumerate(zip(labels[:4], values[:4])):
+            radius = 0.16 + 0.09 * abs(value) / max_value
+            cx, cy = centers[index % len(centers)]
+            if Circle is not None:
+                ax.add_patch(Circle((cx, cy), radius, facecolor=PALETTE[index % len(PALETTE)], alpha=0.32, edgecolor=PALETTE[index % len(PALETTE)], linewidth=1.3))
+            ax.text(cx, cy, label[:12], ha="center", va="center", fontsize=8, fontweight="bold", color="#172623")
+    elif family == "polar":
+        try:
+            from matplotlib.patches import Wedge
+        except Exception:
+            Wedge = None
+        ax.set_xlim(-1.15, 1.15)
+        ax.set_ylim(-1.15, 1.15)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        max_value = max([abs(value) for value in values] + [1.0])
+        for index, value in enumerate(values):
+            start = index * 360 / max(len(values), 1) - 90
+            end = (index + 0.82) * 360 / max(len(values), 1) - 90
+            radius = abs(value) / max_value
+            if Wedge is not None:
+                ax.add_patch(Wedge((0, 0), radius, start, end, facecolor=PALETTE[index % len(PALETTE)], alpha=0.78, edgecolor="white"))
+            angle = math.radians((start + end) / 2)
+            ax.text(1.05 * math.cos(angle), 1.05 * math.sin(angle), labels[index][:8], ha="center", va="center", fontsize=8)
+    elif family == "pie":
         ax.pie([abs(value) for value in values], labels=labels, colors=PALETTE[: len(values)], textprops={"fontsize": 8})
         ax.axis("equal")
-    elif family in {"bar", "hierarchy", "funnel", "calendar", "wordcloud", "pathway", "sequence", "maf"}:
+    elif family == "wordcloud":
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        for index, (label, value, low, high) in enumerate(_wordcloud_entries(parsed, options)):
+            px, top_y, rotate, scale = _wordcloud_slot(index)
+            size = _wordcloud_font_size(value, low, high, scale, 7, 72)
+            ax.text(
+                px,
+                1.0 - top_y,
+                label,
+                fontsize=size,
+                color=WORDCLOUD_PALETTE[index % len(WORDCLOUD_PALETTE)],
+                fontweight="bold",
+                ha="center",
+                va="center",
+                rotation=rotate,
+                alpha=0.92,
+            )
+    elif family == "hierarchy":
+        try:
+            from matplotlib.patches import Rectangle
+        except Exception:
+            Rectangle = None
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        for index, (rx, ry, rw, rh) in enumerate(_treemap_rectangles([max(value, 0.0) for value in values], 0.0, 0.0, 1.0, 1.0)):
+            if Rectangle is not None:
+                ax.add_patch(Rectangle((rx, ry), rw * 0.98, rh * 0.98, facecolor=PALETTE[index % len(PALETTE)], alpha=0.78, linewidth=1.2, edgecolor="white"))
+            if rw > 0.12 and rh > 0.09:
+                ax.text(rx + rw * 0.04, ry + rh * 0.55, labels[index][:18], color="white", fontsize=8, fontweight="bold", va="center")
+    elif family == "funnel":
+        try:
+            from matplotlib.patches import Polygon
+        except Exception:
+            Polygon = None
+        max_value = max([abs(value) for value in values] + [1.0])
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, len(values))
+        ax.axis("off")
+        for index, value in enumerate(values):
+            next_value = values[index + 1] if index + 1 < len(values) else value * 0.78
+            top_w = abs(value) / max_value
+            bottom_w = abs(next_value) / max_value
+            y_top = len(values) - index - 0.1
+            y_bottom = len(values) - index - 0.86
+            points = [(0.5 - top_w / 2, y_top), (0.5 + top_w / 2, y_top), (0.5 + bottom_w / 2, y_bottom), (0.5 - bottom_w / 2, y_bottom)]
+            if Polygon is not None:
+                ax.add_patch(Polygon(points, closed=True, facecolor=PALETTE[index % len(PALETTE)], alpha=0.84, edgecolor="white"))
+            ax.text(0.5, (y_top + y_bottom) / 2, labels[index][:18], color="white", ha="center", va="center", fontsize=8, fontweight="bold")
+    elif family == "calendar":
+        columns = min(14, max(len(values), 1))
+        rows_count = max(math.ceil(len(values) / columns), 1)
+        matrix = [[math.nan for _ in range(columns)] for _ in range(rows_count)]
+        for index, value in enumerate(values):
+            matrix[index // columns][index % columns] = value
+        cmap = cmap_factory.from_list("hgatc_calendar", ["#eaf2ee", "#9fc3b5", "#2f6f73"])
+        ax.imshow(matrix, cmap=cmap, aspect="equal")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for index, label in enumerate(labels):
+            ax.text(index % columns, index // columns, label[-2:], ha="center", va="center", fontsize=7, color="#172623")
+    elif family == "pathway":
+        pathways = sorted({row.get("pathway", row.get(parsed.headers[0], "")) for row in parsed.rows})
+        gene_key = "gene" if "gene" in parsed.headers else parsed.headers[min(1, len(parsed.headers) - 1)]
+        genes = sorted({row.get(gene_key, "") for row in parsed.rows})
+        pathway_positions = {name: (0.2, 1 - (index + 0.5) / max(len(pathways), 1)) for index, name in enumerate(pathways)}
+        gene_positions = {name: (0.75, 1 - (index + 0.5) / max(len(genes), 1)) for index, name in enumerate(genes)}
+        for row in parsed.rows:
+            pathway = row.get("pathway", row.get(parsed.headers[0], ""))
+            gene = row.get(gene_key, "")
+            if pathway in pathway_positions and gene in gene_positions:
+                ax.plot([pathway_positions[pathway][0], gene_positions[gene][0]], [pathway_positions[pathway][1], gene_positions[gene][1]], color="#9aa8a3", linewidth=1.0, zorder=1)
+        for index, pathway in enumerate(pathways):
+            ax.scatter(*pathway_positions[pathway], s=620, marker="s", color=PALETTE[index % len(PALETTE)], edgecolors="white", zorder=2)
+            ax.text(*pathway_positions[pathway], pathway[:12], ha="center", va="center", fontsize=7, color="white", fontweight="bold", zorder=3)
+        for index, gene in enumerate(genes):
+            ax.scatter(*gene_positions[gene], s=260, color=PALETTE[(index + 3) % len(PALETTE)], edgecolors="white", zorder=2)
+            ax.text(gene_positions[gene][0] + 0.04, gene_positions[gene][1], gene[:14], ha="left", va="center", fontsize=8)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+    elif family == "sequence":
+        positions = [numeric_value(row, "position", default=index + 1) for index, row in enumerate(parsed.rows)]
+        scores = [numeric_value(row, "score", default=_first_numeric(row, parsed.headers, 1.0)) for row in parsed.rows]
+        max_score = max(scores or [1.0])
+        ax.set_xlim(min(positions or [0]) - 0.8, max(positions or [1]) + 0.8)
+        ax.set_ylim(0, max_score * 1.25)
+        for index, row in enumerate(parsed.rows):
+            symbol = row.get("symbol", row.get(parsed.headers[min(1, len(parsed.headers) - 1)], ""))[:1]
+            ax.text(positions[index], 0, symbol, ha="center", va="bottom", fontsize=12 + 20 * scores[index] / max_score, color=PALETTE[index % len(PALETTE)], fontweight="bold")
+        ax.set_xlabel("position")
+        ax.set_ylabel("score")
+    elif family == "maf":
+        try:
+            from matplotlib.patches import Rectangle
+        except Exception:
+            Rectangle = None
+        genes = sorted({row.get("gene", "") for row in parsed.rows})
+        samples = sorted({row.get("sample", "") for row in parsed.rows})
+        mutation_types = sorted({row.get("mutation", "") for row in parsed.rows})
+        color_by_mutation = {name: PALETTE[index % len(PALETTE)] for index, name in enumerate(mutation_types)}
+        ax.set_xlim(0, max(len(samples), 1))
+        ax.set_ylim(0, max(len(genes), 1))
+        for row in parsed.rows:
+            if row.get("gene", "") in genes and row.get("sample", "") in samples and Rectangle is not None:
+                gx = samples.index(row.get("sample", ""))
+                gy = genes.index(row.get("gene", ""))
+                ax.add_patch(Rectangle((gx + 0.05, gy + 0.05), 0.9, 0.9, facecolor=color_by_mutation.get(row.get("mutation", ""), PALETTE[0]), edgecolor="white", linewidth=1.0))
+        ax.set_xticks([index + 0.5 for index in range(len(samples))], samples, rotation=35, ha="right")
+        ax.set_yticks([index + 0.5 for index in range(len(genes))], genes)
+        ax.set_xlabel("sample")
+    elif family in {"bar"}:
         orientation = str(options.get("orientation", "vertical"))
-        if orientation == "horizontal" or family == "funnel":
+        if orientation == "horizontal":
             order = list(range(len(values)))[::-1]
             ax.barh([labels[index] for index in order], [abs(values[index]) for index in order], color=[PALETTE[index % len(PALETTE)] for index in order])
         else:
@@ -816,14 +1156,48 @@ def _matplotlib_family_plot(ax, fig, parsed: ParsedTable, family: str, options: 
             ax.bar(categories, series_values, bottom=bottoms, label=series_name, color=PALETTE[series_index % len(PALETTE)])
             bottoms = [bottom + value for bottom, value in zip(bottoms, series_values)]
         ax.legend(frameon=False, fontsize=8)
-    elif family in {"line", "area", "dual-axis", "dumbbell", "radar"}:
+    elif family == "radar":
+        angles = [math.tau * index / max(len(values), 1) for index in range(len(values))]
+        max_value = max([abs(value) for value in values] + [1.0])
+        points = [(abs(value) / max_value * math.cos(angle), abs(value) / max_value * math.sin(angle)) for value, angle in zip(values, angles)]
+        closed = points + points[:1]
+        if closed:
+            ax.plot([point[0] for point in closed], [point[1] for point in closed], color=PALETTE[0], linewidth=2.2)
+            ax.fill([point[0] for point in closed], [point[1] for point in closed], color=PALETTE[0], alpha=0.22)
+        for label, angle in zip(labels, angles):
+            ax.text(1.08 * math.cos(angle), 1.08 * math.sin(angle), label[:8], ha="center", va="center", fontsize=8)
+        for radius in (0.25, 0.5, 0.75, 1.0):
+            circle = [(radius * math.cos(step * math.tau / 80), radius * math.sin(step * math.tau / 80)) for step in range(81)]
+            ax.plot([point[0] for point in circle], [point[1] for point in circle], color="#dde6e2", linewidth=0.7)
+        ax.set_aspect("equal")
+        ax.axis("off")
+    elif family == "dumbbell":
+        first_values = [_first_numeric(row, parsed.headers, index) for index, row in enumerate(parsed.rows)]
+        second_values = [_second_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
+        y_values = list(range(len(labels)))
+        for y_index, first, second in zip(y_values, first_values, second_values):
+            ax.plot([first, second], [y_index, y_index], color="#9aa8a3", linewidth=2.0)
+        ax.scatter(first_values, y_values, color=PALETTE[0], s=70, label="start", edgecolors="white")
+        ax.scatter(second_values, y_values, color=PALETTE[1], s=70, label="end", edgecolors="white")
+        ax.set_yticks(y_values, labels)
+        ax.legend(frameon=False, fontsize=8)
+        ax.set_xlabel("value")
+    elif family == "dual-axis":
+        xs = [numeric_value(row, "x", default=index) for index, row in enumerate(parsed.rows)]
+        bar_values = [numeric_value(row, "bar", default=_first_numeric(row, parsed.headers, index)) for index, row in enumerate(parsed.rows)]
+        line_values = [numeric_value(row, "line", default=_second_numeric(row, parsed.headers, index + 1)) for index, row in enumerate(parsed.rows)]
+        ax.bar(xs, bar_values, color=PALETTE[0], alpha=0.62)
+        ax.set_ylabel("bar", color=PALETTE[0])
+        twin = ax.twinx()
+        twin.plot(xs, line_values, marker="o", color=PALETTE[1], linewidth=2.2)
+        twin.set_ylabel("line", color=PALETTE[1])
+        ax.set_xlabel("x")
+    elif family in {"line", "area"}:
         xs = [numeric_value(row, "x", default=index) for index, row in enumerate(parsed.rows)]
         ys = [_second_numeric(row, parsed.headers, index + 1) for index, row in enumerate(parsed.rows)]
         ax.plot(xs, ys, marker="o", color=PALETTE[0], linewidth=2.2)
         if family == "area":
             ax.fill_between(xs, ys, min(ys or [0]), color=PALETTE[0], alpha=0.22)
-        if family == "dual-axis" and "line" in parsed.headers:
-            ax.plot(xs, [numeric_value(row, "line") for row in parsed.rows], marker="s", color=PALETTE[1], linewidth=2.0)
         ax.set_xlabel("x")
         ax.set_ylabel("value")
     elif family in {"scatter", "correlation", "qq", "genome", "epigenome"}:

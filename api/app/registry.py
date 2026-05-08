@@ -46,6 +46,9 @@ class PlotModule:
     source_url: str
     engine: str
     renderer_family: str
+    srplot_reference_url: str = ""
+    srplot_parity_status: str = ""
+    style_profile: str = ""
     visual_kind: str = ""
     renderer_quality: str = ""
     option_groups: list[OptionGroup] = field(default_factory=list)
@@ -122,6 +125,30 @@ def _renderer_quality(slug: str, engine: str) -> str:
     if engine == "r":
         return "plot-specific-r"
     return "plot-specific-python"
+
+SRPLOT_REFERENCE_OVERRIDES = {
+    "volcano": "https://bioinformatics.com.cn/plot_basic_3_color_volcano_plot_086_en",
+    "wordcloud": "https://www.bioinformatics.com.cn/plot_basic_wordcloud_118_en",
+}
+
+STYLE_PROFILE_OVERRIDES = {
+    "volcano": "srplot-volcano-three-color",
+    "wordcloud": "srplot-wordcloud",
+}
+
+
+def _srplot_reference_url(slug: str, source_url: str) -> str:
+    return SRPLOT_REFERENCE_OVERRIDES.get(slug, source_url)
+
+
+def _srplot_parity_status(slug: str) -> str:
+    if slug in SRPLOT_REFERENCE_OVERRIDES:
+        return "reference-known"
+    return "reference-needed"
+
+
+def _style_profile(slug: str, family: str) -> str:
+    return STYLE_PROFILE_OVERRIDES.get(slug, f"srplot-{family}")
 
 
 def _option_groups(fields: list[OptionField]) -> list[OptionGroup]:
@@ -312,9 +339,9 @@ FAMILY_PROFILES: dict[str, FamilyProfile] = {
     ),
     "wordcloud": FamilyProfile(
         ["word", "weight"],
-        "word\tweight\nimmune\t30\ncell\t24\nsignal\t18\npathway\t14\nexpression\t12\ngenome\t10\n",
+        "word\tweight\nhealth\t120\nCOVID\t104\ninformation\t92\nmedical\t84\ncoronavirus\t55\noverview\t52\ntheme\t49\ncommunity\t30\ndemonstrate\t27\nDirichlet\t25\ntechnique\t24\nspecialists\t23\npublic\t22\ncombating\t22\nefforts\t21\nthreats\t21\noutbreak\t20\nliterature\t20\nglobal\t19\nscientists\t19\ncrisis\t18\nroles\t18\nresearch\t18\nunprecedented\t18\nscience\t17\narticle\t17\nkey\t17\ntext\t16\nsupport\t16\nmining\t16\ncentury\t15\nimmunity\t15\ninterrelationships\t14\nvisualisation\t14\nrepresentative\t14\nallocation\t14\nlatent\t14\nplay\t13\nprocedure\t13\nnetwork\t13\nexplore\t13\napplying\t13\ndiseases\t13\nMERS\t12\nSARS\t12\ngeneric\t12\npresents\t12\ncommunities\t12\nsimilarity\t11\ndisplays\t11\nreveals\t11\nrelated\t10\nmass\t10\nmain\t10\nstudies\t10\nperform\t10\ndifference\t10\n",
         "Weighted term cloud.",
-        defaults={"maxWords": 60},
+        defaults={"width": 684, "height": 683, "title": "", "maxWords": 60},
         option_fields=[OptionField("maxWords", "Max words", "number", 60)],
     ),
     "maf": FamilyProfile(
@@ -378,6 +405,9 @@ def module_to_dict(module: PlotModule) -> dict[str, Any]:
         "citation": module.citation,
         "exportFormats": module.export_formats,
         "sourceUrl": module.source_url,
+        "srplotReferenceUrl": module.srplot_reference_url,
+        "srplotParityStatus": module.srplot_parity_status,
+        "styleProfile": module.style_profile,
         "engine": module.engine,
         "rendererFamily": module.renderer_family,
         "visualKind": module.visual_kind,
@@ -423,19 +453,23 @@ def _template(
 ) -> PlotModule:
     profile = FAMILY_PROFILES[family]
     option_fields = COMMON_OPTIONS + profile.option_fields
+    source_url = _source_url(page, slug)
     return PlotModule(
         slug=slug,
         title=title,
         category=category,
         description=description or profile.description,
         required_columns=profile.required_columns,
-        default_options=_options(title=title, **profile.defaults),
+        default_options=_options(**{"title": title, **profile.defaults}),
         option_fields=option_fields,
         demo_data=profile.demo_data,
         citation=CITATION,
-        source_url=_source_url(page, slug),
+        source_url=source_url,
         engine=engine,
         renderer_family=family,
+        srplot_reference_url=_srplot_reference_url(slug, source_url),
+        srplot_parity_status=_srplot_parity_status(slug),
+        style_profile=_style_profile(slug, family),
         visual_kind=_visual_kind(slug, family),
         renderer_quality=_renderer_quality(slug, engine),
         option_groups=_option_groups(option_fields),
@@ -674,6 +708,9 @@ def _build_modules() -> tuple[PlotModule, ...]:
 def _with_manifest_metadata(module: PlotModule) -> PlotModule:
     return replace(
         module,
+        srplot_reference_url=module.srplot_reference_url or _srplot_reference_url(module.slug, module.source_url),
+        srplot_parity_status=module.srplot_parity_status or _srplot_parity_status(module.slug),
+        style_profile=module.style_profile or _style_profile(module.slug, module.renderer_family),
         visual_kind=module.visual_kind or _visual_kind(module.slug, module.renderer_family),
         renderer_quality=module.renderer_quality or _renderer_quality(module.slug, module.engine),
         option_groups=module.option_groups or _option_groups(module.option_fields),
